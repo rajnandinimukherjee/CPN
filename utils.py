@@ -18,7 +18,7 @@ def CNtoR2N(x, matrix=False):
         new_vec[..., 1::2, 1::2] = x.real
     else:
         new_vec = torch.zeros(
-            x.shape[:-1] + (2 * x.shape[-1],), dtype=torch.float64)
+            x.shape[:-1] + (2 * x.shape[-1],), dtype=torch.double)
         new_vec[..., 0::2], new_vec[..., 1::2] = x.real, x.imag
     return new_vec
 
@@ -29,7 +29,7 @@ def R2NtoCN(X):
 
 def Lambda(Y):
     # return (1 + torch.linalg.norm(Y, axis=-1)**2)**0.5
-    return (1+torch.einsum('...i,...i->...', Y, Y))**0.5
+    return (1+torch.einsum('...i,...i->...', Y.conj(), Y))**0.5
 
 
 def call_PDF(filename, show=True):

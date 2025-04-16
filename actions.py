@@ -2,13 +2,12 @@ import torch
 import pdb
 
 
-def ToyModelAction(vecs, beta, conj=None):
-    z, w = vecs[..., 0, :], vecs[..., 1, :]
-    if conj is not None:
-        zconj, wconj = conj[..., 0, :], conj[..., 1, :]
-    else:
-        zconj, wconj = z.conj(), w.conj()
+def ToyModelAction(fields, beta, conj=None):
+    assert fields.shape[-2] == 2, "toy model only considers 2 fields"
+    f1, f2 = fields[..., 0, :], fields[..., 1, :]
+    f1conj = f1.conj() if conj is None else conj[..., 0, :]
+    f2conj = f2.conj() if conj is None else conj[..., 1, :]
 
-    zdagw = torch.sum(zconj*w, dim=-1)
-    wdagz = torch.sum(wconj*z, dim=-1)
-    return -beta * zdagw * wdagz
+    f1dagf2 = torch.sum(f1conj*f2, dim=-1)
+    f2dagf1 = torch.sum(f2conj*f1, dim=-1)
+    return -beta * (f1dagf2 * f2dagf1).real

@@ -1,7 +1,3 @@
-from utils import CNtoR2N, call_PDF
-from deformations import TorusDeformations
-from actions import ToyModelAction
-from observables import OnePointFn
 import pdb
 
 import h5py
@@ -9,27 +5,31 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.func import jacrev, vmap
 from tqdm import tqdm
 
+from actions import ToyModelAction
+from deformations import HomogenousDeformations
+from observables import OnePointFn
 from plot_settings import plotparams
+from utils import CNtoR2N, R2NtoCN, call_PDF
 
 plt.rcParams.update(plotparams)
 
 
 class AlphaNet(nn.Module):
 
-    def __init__(self, input_dim, output_dim, hidden_dim=128):
+    def __init__(self, input_dim, output_dim, hidden_dim=8):
         super(AlphaNet, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(input_dim, hidden_dim, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
+            nn.Linear(hidden_dim, output_dim, dtype=torch.double)
         )
 
-    def forward(self, x):
-        X = torch.flatten(CNtoR2N(x))
+    def forward(self, X):
         return self.network(X)
 
 
@@ -44,9 +44,9 @@ class VarianceLoss(nn.Module):
         self.kwargs = kwargs
 
         self.initial_var = obs(
-            func='var', model=self.model, **self.kwargs).item()
+            func='var', model=self.model, sampletype="all", **self.kwargs).item()
         self.target_exp = obs(
-            func='exp', model=self.model, **self.kwargs).item()
+            func='exp', model=self.model, sampletype="all", **self.kwargs).item()
 
     def forward(self, alphas, **kwargs):
         return self.variance(alphas, **kwargs)
@@ -63,13 +63,15 @@ class VarianceLoss(nn.Module):
 
 
 class Trainer:
-    def __init__(self, model, parnet, loss_fn, optimizer, epochs, batch_size):
 
+    def __init__(self, model, parnet, loss_fn, optimizer, epochs, batch_size):
         self.model = model
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.epochs = epochs
         self.batch_size = batch_size
+        self.train_size = self.model.samples["train"].size(0)
+        self.test_size = self.model.samples["test"].size(0)
         self.parnet = parnet
 
         self.train_var, self.train_exp = [], []
@@ -80,24 +82,21 @@ class Trainer:
             self.optimizer.zero_grad()
 
             batch_idx = torch.randperm(
-                self.model.train_samples.size(0))[:self.batch_size]
-            alphas = self.parnet(self.model.train_samples[batch_idx])
-
-            loss = self.loss_fn(alphas, batch_idx=batch_idx)
+                self.model.samples["train"].size(0))[:self.batch_size]
+            loss = self.loss_fn(self.parnet, batch_idx=batch_idx)
             loss.backward()
             self.optimizer.step()
 
             if epoch % 10 == 0 and update:
                 print(f"Epoch {epoch}: Loss = {loss.item()}")
 
-            self.train_var.append(
-                self.loss_fn.variance(alphas, batch_idx=batch_idx))
+            self.train_var.append(loss.item())
             self.train_exp.append(
-                self.loss_fn.expectation(alphas, batch_idx=batch_idx))
-            self.test_var.append(
-                self.loss_fn.variance(alphas.clone().detach(), sampletype="test"))
-            self.test_exp.append(
-                self.loss_fn.expectation(alphas.clone().detach(), sampletype="test"))
+                self.loss_fn.expectation(self.parnet, batch_idx=batch_idx))
+            self.test_var.append(self.loss_fn.variance(
+                self.parnet, sampletype="test"))
+            self.test_exp.append(self.loss_fn.expectation(
+                self.parnet, sampletype="test"))
 
         self.train_var = torch.tensor(self.train_var)
         self.train_exp = torch.tensor(self.train_exp)
@@ -121,18 +120,22 @@ class Trainer:
 
         if plot_error:
             ax[0].fill_between(range(self.epochs),
-                               self.train_exp+(self.train_var**0.5),
-                               self.train_exp-(self.train_var**0.5),
+                               self.train_exp +
+                               (self.train_var/self.batch_size)**0.5,
+                               self.train_exp -
+                               (self.train_var/self.batch_size)**0.5,
                                color="tab:blue", alpha=0.3)
             ax[0].fill_between(range(self.epochs),
-                               self.test_exp+(self.test_var**0.5),
-                               self.test_exp-(self.test_var**0.5),
+                               self.test_exp +
+                               (self.test_var/self.test_size)**0.5,
+                               self.test_exp -
+                               (self.test_var/self.test_size)**0.5,
                                color="tab:orange", alpha=0.3)
             ax[0].fill_between(range(self.epochs),
                                self.loss_fn.target_exp +
-                               (self.loss_fn.initial_var**0.5),
+                               (self.loss_fn.initial_var/self.train_size)**0.5,
                                self.loss_fn.target_exp -
-                               (self.loss_fn.initial_var**0.5),
+                               (self.loss_fn.initial_var/self.train_size)**0.5,
                                color="k", alpha=0.1)
 
         handles, labels = ax[0].get_legend_handles_labels()
@@ -152,13 +155,15 @@ class Trainer:
         ax[2].set_xlabel('epochs')
         ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
 
+        ax[2].set_xlim([0, self.epochs])
+
         plt.tight_layout()
         plt.subplots_adjust(hspace=0)
 
         call_PDF(fname, show=show)
 
 
-N_EPOCHS = 1000
+N_EPOCHS = 400
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
@@ -167,45 +172,48 @@ BATCH_SIZE = 1000
 TRAINING_SPLIT = 0.8
 
 if __name__ == "__main__":
+
     file = h5py.File("CPN.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
-    samples = torch.tensor(file["vectors"][burn+1::stepsize])
+    samples = torch.tensor(
+        file["vectors"][burn+1::stepsize*10],
+        dtype=torch.complex128)
     N_conf = len(samples)
 
-    training_size = int(TRAINING_SPLIT*N_conf)
-    train_indices = torch.randperm(N_conf)[:training_size]
+    train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = TorusDeformations(N, deftype="general")
-    model.train_samples = samples[train_indices].clone().requires_grad_(True)
-    model.test_samples = samples[~train_indices].clone()
+    model = HomogenousDeformations(N, deftype="general")
+    model.samples = {
+        "all": samples,
+        "train": samples[train_indices],
+        "test": samples[~train_indices]
+    }
 
-    Ps = torch.exp(-ACTION(model.train_samples, beta=BETA))
     obskwargs = {
         "i": I,
         "j": J,
         "varidx": VARIDX,
         "action": ACTION,
         "beta": BETA,
-        "Ps": Ps,
-        "Norm": torch.sum(Ps)
     }
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    alphanet = AlphaNet(BATCH_SIZE*2*2*(N+1), N+1)
+    alphanet = AlphaNet(2*model.DOF, model.DOF)
     optimizer = optim.Adam(alphanet.parameters(), lr=1e-3)
     trainer = Trainer(model, alphanet, loss_fn,
                       optimizer, N_EPOCHS, BATCH_SIZE)
 
     trainer.train(update=False)
-    # print(f"{N_conf} configs, batch size {BATCH_SIZE}, " +
-    #      f"{N_EPOCHS} epochs, optimized alphas = {','.join(str(
-    #          torch.round(x*1000).item()/1000) for x in alphas.detach())}")
-    print(f"Variance reduction {
-          loss_fn.initial_var} -> {trainer.train_var[-1]}")
-    print(f"StN improvement {
-          loss_fn.target_exp/(loss_fn.initial_var**0.5)} -> {
-          trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)}")
+    print(f"{N_conf} configs, batch size {BATCH_SIZE}")
+    vari, varf = loss_fn.initial_var, trainer.train_var[-1]
+    print(f"Variance reduction {vari} -> {varf} ({
+          (vari-varf)*100/vari}%)")
+
+    stni = loss_fn.target_exp/(loss_fn.initial_var**0.5)
+    stnf = trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)
+    print(f"StN improvement {stni} -> {stnf} ({
+          (stnf-stni)*100/stni}%)")
     trainer.plot_training()
