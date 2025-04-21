@@ -10,39 +10,128 @@ from SUN import SUN_generators
 
 
 class SkewMatrixDeformations(nn.Module):
-    def __init__(self, N):
+    def __init__(self, N, deftype="general"):
         super(SkewMatrixDeformations, self).__init__()
         self.N = N
+        self.deftype = deftype
+
+        self.size = int(2*(N+1))
+        self.DOF = int(self.size*(self.size-1)/2)
+        self.skew_idx = torch.triu_indices(self.size, self.size, offset=1)
+        self.flat_idx = self.skew_idx[0]*self.size + self.skew_idx[1]
+
+    def build_A(self, alphas):
+        batch_shape = alphas.shape[:-1]
+        assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
+
+        A_flat = torch.zeros((*batch_shape, self.size**2), dtype=torch.double)
+        flat_idx = self.flat_idx.unsqueeze(0).expand(
+            *batch_shape, -1) if alphas.dim() > 1 else self.flat_idx
+        A_flat = A_flat.scatter(-1, flat_idx, alphas)
+        A = A_flat.view(*batch_shape, self.size, self.size)
+        A = A-A.T
+        return A
 
     def deformx(self, X, alphas):
-        dim = X.shape[-1]
-        assert alphas.shape[0] == (dim)*(dim-1)/2, \
-            "Alphas of incorrect size"
-
-        A = torch.zeros((2*self.N+2, 2*self.N+2))
-        indices = torch.triu_indices(2*self.N+2, 2*self.N+2, offset=1)
-        A[indices[0], indices[1]] = alphas
-        A = A-A.T
-        Y = torch.einsum('ij,...j->...i', A, X)
+        A = self.build_A(alphas)
+        Y = torch.einsum('...ij,...j->...i', A, X)
         return Y
 
-    def complexify(self, X, Y, alphas):
+    def complexify(self, X, Y):
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z
 
     def detJac(self, X, Y, alphas):
-        if X.ndim == 1:
-            L = Lambda(Y)
-            Z = self.complexify(X, Y, alphas)
+        batch_shape = X.shape[:-1]
+        flat_X = X.reshape(-1, X.shape[-1])
 
-            J_real = torch.autograd.functional.jacobian(lambda X: Z.real, X)
-            J_imag = torch.autograd.functional.jacobian(lambda X: Z.imag, X)
+        if not isinstance(alphas, torch.Tensor):
+            def Zreal(x):
+                a = alphas(x)
+                y = self.deformx(x, a)
+                return x*Lambda(y).unsqueeze(-1)
 
-            J = J_real + 1j*J_imag
-            return torch.linalg.det(J)/(L**2)
+            def Zimag(x):
+                a = alphas(x)
+                y = self.deformx(x, a)
+                return y
+
+            Jreal = vmap(jacrev(Zreal))(flat_X)
+            Jimag = vmap(jacrev(Zimag))(flat_X)
         else:
-            return 0
+            def Z(x):
+                y = self.deformx(x, alphas)
+                return self.complexify(x, y)
+
+            Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
+            Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)
+
+        J = Jreal + 1j*Jimag
+        J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
+
+        detJ = torch.linalg.det(J)/(Lambda(Y)**2)
+
+        return torch.prod(detJ, dim=-1)
+
+
+class ProjectorDeformations(nn.Module):
+    def __init__(self, N, deftype="general"):
+        super(ProjectorDeformations, self).__init__()
+        self.N = N
+        self.deftype = deftype
+
+        self.size = int(2*(N+1))
+        self.DOF = int(self.size*self.size)
+        self.eye = torch.eye(self.size)
+
+    def deformx(self, X, alphas):
+        assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
+
+        B = alphas.view(*alphas.shape[:-1], self.size, self.size)
+        P = torch.einsum('...i,...j->...ij', X, X)
+        Id = self.eye.expand(*X.shape[:-1], self.size,
+                             self.size) if X.dim() > 1 else self.eye
+        A = torch.einsum('...ij, ...jk->...ik', (Id-P), B)
+        Y = torch.einsum('...ij,...j->...i', A, X)
+        return Y
+
+    def complexify(self, X, Y):
+        LX = X * Lambda(Y).unsqueeze(-1)
+        Z = LX + 1j * Y
+        return Z
+
+    def detJac(self, X, Y, alphas):
+        batch_shape = X.shape[:-1]
+        flat_X = X.reshape(-1, X.shape[-1])
+
+        if not isinstance(alphas, torch.Tensor):
+            def Zreal(x):
+                a = alphas(x)
+                y = self.deformx(x, a)
+                return x*Lambda(y).unsqueeze(-1)
+
+            def Zimag(x):
+                a = alphas(x)
+                y = self.deformx(x, a)
+                return y
+
+            Jreal = vmap(jacrev(Zreal))(flat_X)
+            Jimag = vmap(jacrev(Zimag))(flat_X)
+        else:
+            def Z(x):
+                y = self.deformx(x, alphas)
+                return self.complexify(x, y)
+
+            Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
+            Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)
+
+        J = Jreal + 1j*Jimag
+        J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
+
+        detJ = torch.linalg.det(J)/(Lambda(Y)**2)
+
+        return torch.prod(detJ, dim=-1)
 
 
 class TorusDeformations(nn.Module):
@@ -56,13 +145,12 @@ class TorusDeformations(nn.Module):
         self.basis = SUN_generators(N+1, cartan=True)
 
     def deformx(self, X, alphas):
-        assert alphas.shape[0] == self.DOF, \
-            "Alphas of incorrect size"
+        assert alphas.shape[0] == self.DOF, "Alphas of incorrect size"
 
         alpha_H = torch.einsum(
             'i,ijk->jk', alphas.to(torch.complex128), self.basis)
         Y = torch.einsum('ij,...i->...j', CNtoR2N(1j *
-                         alpha_H, matrix=True), X.to(torch.complex128))
+                                                  alpha_H, matrix=True), X.to(torch.complex128))
         return Y
 
     def complexify(self, X, Y, alphas):
@@ -75,8 +163,8 @@ class TorusDeformations(nn.Module):
             L = Lambda(Y).to(torch.complex128)
             L2dim = L.unsqueeze(-1).unsqueeze(-1)
             A = CNtoR2N(1j*torch.einsum('i,ijk->jk',
-                        alphas.to(torch.complex128),
-                self.basis), matrix=True)
+                                        alphas.to(torch.complex128),
+                                        self.basis), matrix=True)
 
             J = L2dim * self.eye
             J -= torch.einsum('...i,...j->...ij', X,
@@ -102,8 +190,7 @@ class HomogenousDeformations(nn.Module):
             A = torch.diag_embed(
                 torch.repeat_interleave(alphas(X), repeats=2, dim=-1))
         else:
-            assert alphas.shape[-1] == self.DOF, \
-                "Alphas of incorrect size"
+            assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
 
             A = torch.diag_embed(
                 torch.repeat_interleave(alphas, repeats=2, dim=-1))

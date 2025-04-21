@@ -5,28 +5,29 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.func import jacrev, vmap
 from tqdm import tqdm
 
 from actions import ToyModelAction
 from deformations import HomogenousDeformations
 from observables import OnePointFn
 from plot_settings import plotparams
-from utils import CNtoR2N, R2NtoCN, call_PDF
+from utils import call_PDF
 
 plt.rcParams.update(plotparams)
 
 
 class AlphaNet(nn.Module):
 
-    def __init__(self, input_dim, output_dim, hidden_dim=8):
+    def __init__(self, input_dim, output_dim, hidden_dim1=16, hidden_dim2=8):
         super(AlphaNet, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim, dtype=torch.double),
+            nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim, dtype=torch.double),
+            # nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
+            # nn.ReLU(),
+            nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim, dtype=torch.double)
+            nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
         )
 
     def forward(self, X):
@@ -163,7 +164,7 @@ class Trainer:
         call_PDF(fname, show=show)
 
 
-N_EPOCHS = 400
+N_EPOCHS = 450
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
@@ -208,12 +209,13 @@ if __name__ == "__main__":
 
     trainer.train(update=False)
     print(f"{N_conf} configs, batch size {BATCH_SIZE}")
-    vari, varf = loss_fn.initial_var, trainer.train_var[-1]
+    vari, varf = loss_fn.initial_var, loss_fn.variance(
+        alphanet, sampletype="all")
     print(f"Variance reduction {vari} -> {varf} ({
           (vari-varf)*100/vari}%)")
 
-    stni = loss_fn.target_exp/(loss_fn.initial_var**0.5)
-    stnf = trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)
+    stni = loss_fn.target_exp/(vari**0.5)
+    stnf = loss_fn.expectation(alphanet, sampletype="all")/(varf**0.5)
     print(f"StN improvement {stni} -> {stnf} ({
           (stnf-stni)*100/stni}%)")
     trainer.plot_training()

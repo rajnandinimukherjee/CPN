@@ -1,5 +1,5 @@
 from utils import call_PDF
-from deformations import HomogenousDeformations, TorusDeformations
+from deformations import *
 from actions import ToyModelAction
 from observables import OnePointFn
 import pdb
@@ -149,16 +149,17 @@ class Trainer:
         call_PDF(fname, show=show)
 
 
+N = 2
 N_EPOCHS = 1000
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, VARIDX = 0, 0, 1
+I, J, VARIDX = 0, 1, 1
 BATCH_SIZE = 1000
 TRAINING_SPLIT = 0.8
 
 if __name__ == "__main__":
-    file = h5py.File("CPN.h5", 'r')["configs"]
+    file = h5py.File(f"CP{N}.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
     samples = torch.tensor(

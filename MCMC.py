@@ -39,8 +39,8 @@ def metropolis(samples: List, action: Callable,
 
 def MCMC(samples: List, iters: int = 10000,
          burn: int = 1000, stepsize: int = 1,
-         save: bool = False, fname: str = 'CPN.h5',
-         **kwargs) -> np.ndarray:
+         save: bool = False, fname: str = '',
+         N: int = 3, **kwargs) -> np.ndarray:
     """ basic MCMC for generating configs of z and w
     example usage:
     MCMC([np.array([randCPN(3), randCPN(3)])], iters=500000, burn=5000,
@@ -49,11 +49,13 @@ def MCMC(samples: List, iters: int = 10000,
 
     accepts = 0
     for idx in tqdm(range(iters), desc="iterations"):
-        accepts += metropolis(samples, **kwargs)
+        accepts += metropolis(samples, N=N, **kwargs)
 
     print(f'acceptance rate: {
           accepts}/{iters}={np.around(accepts*100/iters, 1)}%')
     if save:
+        if fname == "":
+            fname = f"CP{N}.h5"
         file = h5py.File(fname, 'a')
         if "configs" in file:
             del file["configs"]
