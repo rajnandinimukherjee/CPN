@@ -89,10 +89,10 @@ class ProjectorDeformations(nn.Module):
         assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
 
         B = alphas.view(*alphas.shape[:-1], self.size, self.size)
-        P = torch.einsum('...i,...j->...ij', X, X)
+        PX = torch.einsum('...i,...j->...ij', X, X)
         Id = self.eye.expand(*X.shape[:-1], self.size,
                              self.size) if X.dim() > 1 else self.eye
-        A = torch.einsum('...ij, ...jk->...ik', (Id-P), B)
+        A = torch.einsum('...ij, ...jk->...ik', (Id-PX), B)
         Y = torch.einsum('...ij,...j->...i', A, X)
         return Y
 
@@ -149,11 +149,11 @@ class TorusDeformations(nn.Module):
 
         alpha_H = torch.einsum(
             'i,ijk->jk', alphas.to(torch.complex128), self.basis)
-        Y = torch.einsum('ij,...i->...j', CNtoR2N(1j *
-                                                  alpha_H, matrix=True), X.to(torch.complex128))
+        Y = torch.einsum('ij,...i->...j', CNtoR2N(
+            1j * alpha_H, matrix=True), X.to(torch.complex128))
         return Y
 
-    def complexify(self, X, Y, alphas):
+    def complexify(self, X, Y):
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z

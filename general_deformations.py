@@ -8,7 +8,7 @@ import torch.optim as optim
 from tqdm import tqdm
 
 from actions import ToyModelAction
-from deformations import HomogenousDeformations
+import deformations as defs
 from observables import OnePointFn
 from plot_settings import plotparams
 from utils import call_PDF
@@ -44,23 +44,23 @@ class VarianceLoss(nn.Module):
         self.obs = obs
         self.kwargs = kwargs
 
-        self.initial_var = obs(
-            func='var', model=self.model, sampletype="all", **self.kwargs).item()
-        self.target_exp = obs(
-            func='exp', model=self.model, sampletype="all", **self.kwargs).item()
+        self.initial_var = self.variance(deform=False, sampletype="all")
+        self.target_exp = self.expectation(deform=False, sampletype="all").real
 
-    def forward(self, alphas, **kwargs):
-        return self.variance(alphas, **kwargs)
-
-    def variance(self, alphas, batch_idx=None, sampletype="train"):
-        return self.obs(func='var', deform=True, alphas=alphas,
+    def get_obs(self, alphas=None, batch_idx=None,
+                deform=True, sampletype="train"):
+        return self.obs(deform=deform, alphas=alphas,
                         model=self.model, batch_idx=batch_idx,
                         sampletype=sampletype, **self.kwargs)
 
-    def expectation(self, alphas, batch_idx=None, sampletype="train"):
-        return self.obs(func='exp', deform=True, alphas=alphas,
-                        model=self.model, batch_idx=batch_idx,
-                        sampletype=sampletype, **self.kwargs)
+    def forward(self, **kwargs):
+        return self.variance(**kwargs)
+
+    def variance(self, **kwargs):
+        return self.get_obs(**kwargs).var()
+
+    def expectation(self, **kwargs):
+        return self.get_obs(**kwargs).mean()
 
 
 class Trainer:
@@ -84,7 +84,8 @@ class Trainer:
 
             batch_idx = torch.randperm(
                 self.model.samples["train"].size(0))[:self.batch_size]
-            loss = self.loss_fn(self.parnet, batch_idx=batch_idx)
+            loss = self.loss_fn(alphas=self.parnet,
+                                batch_idx=batch_idx, sampletype="train")
             loss.backward()
             self.optimizer.step()
 
@@ -92,17 +93,21 @@ class Trainer:
                 print(f"Epoch {epoch}: Loss = {loss.item()}")
 
             self.train_var.append(loss.item())
-            self.train_exp.append(
-                self.loss_fn.expectation(self.parnet, batch_idx=batch_idx))
+            self.train_exp.append(self.loss_fn.expectation(
+                alphas=self.parnet,
+                batch_idx=batch_idx,
+                sampletype="train"))
             self.test_var.append(self.loss_fn.variance(
-                self.parnet, sampletype="test"))
+                alphas=self.parnet,
+                sampletype="test"))
             self.test_exp.append(self.loss_fn.expectation(
-                self.parnet, sampletype="test"))
+                alphas=self.parnet,
+                sampletype="test"))
 
         self.train_var = torch.tensor(self.train_var)
-        self.train_exp = torch.tensor(self.train_exp)
+        self.train_exp = torch.tensor(self.train_exp).real
         self.test_var = torch.tensor(self.test_var)
-        self.test_exp = torch.tensor(self.test_exp)
+        self.test_exp = torch.tensor(self.test_exp).real
 
     def plot_training(self, fname='training.pdf', show=True,
                       plot_error=True):
@@ -117,7 +122,8 @@ class Trainer:
         ax[0].plot(range(self.epochs), self.test_exp,
                    label="test", c="tab:orange")
         ax[0].axhline(self.loss_fn.target_exp, c='k', label='undeformed')
-        ax[0].set_ylabel(r'$\mathtt{Exp}\left[Q_{'+sub_str+r'}\right]$')
+        ax[0].set_ylabel(
+            r'$\mathrm{Re}\left[\mathtt{Exp}Q_{'+sub_str+r'}\right]$')
 
         if plot_error:
             ax[0].fill_between(range(self.epochs),
@@ -164,6 +170,7 @@ class Trainer:
         call_PDF(fname, show=show)
 
 
+N = 3
 N_EPOCHS = 450
 BETA = 4.5
 ACTION = ToyModelAction
@@ -174,7 +181,7 @@ TRAINING_SPLIT = 0.8
 
 if __name__ == "__main__":
 
-    file = h5py.File("CPN.h5", 'r')["configs"]
+    file = h5py.File(f"CP{N}.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
     samples = torch.tensor(
@@ -185,7 +192,7 @@ if __name__ == "__main__":
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = HomogenousDeformations(N, deftype="general")
+    model = defs.HomogenousDeformations(N, deftype="general")
     model.samples = {
         "all": samples,
         "train": samples[train_indices],
@@ -210,12 +217,13 @@ if __name__ == "__main__":
     trainer.train(update=False)
     print(f"{N_conf} configs, batch size {BATCH_SIZE}")
     vari, varf = loss_fn.initial_var, loss_fn.variance(
-        alphanet, sampletype="all")
+        alphas=alphanet, sampletype="all")
     print(f"Variance reduction {vari} -> {varf} ({
           (vari-varf)*100/vari}%)")
 
     stni = loss_fn.target_exp/(vari**0.5)
-    stnf = loss_fn.expectation(alphanet, sampletype="all")/(varf**0.5)
+    stnf = loss_fn.expectation(
+        alphas=alphanet, sampletype="all").real/(varf**0.5)
     print(f"StN improvement {stni} -> {stnf} ({
           (stnf-stni)*100/stni}%)")
     trainer.plot_training()

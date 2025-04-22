@@ -1,5 +1,5 @@
 from utils import call_PDF
-from deformations import *
+import deformations as defs
 from actions import ToyModelAction
 from observables import OnePointFn
 import pdb
@@ -26,23 +26,23 @@ class VarianceLoss(nn.Module):
         self.obs = obs
         self.kwargs = kwargs
 
-        self.initial_var = obs(
-            func='var', model=self.model, sampletype="all", **self.kwargs).item()
-        self.target_exp = obs(
-            func='exp', model=self.model, sampletype="all", **self.kwargs).item()
+        self.initial_var = self.variance(deform=False, sampletype="all")
+        self.target_exp = self.expectation(deform=False, sampletype="all").real
 
-    def forward(self, alphas, **kwargs):
-        return self.variance(alphas, **kwargs)
-
-    def variance(self, alphas, batch_idx=None, sampletype="train"):
-        return self.obs(func='var', deform=True, alphas=alphas,
+    def get_obs(self, alphas=None, batch_idx=None,
+                deform=True, sampletype="train"):
+        return self.obs(deform=deform, alphas=alphas,
                         model=self.model, batch_idx=batch_idx,
                         sampletype=sampletype, **self.kwargs)
 
-    def expectation(self, alphas, batch_idx=None, sampletype="train"):
-        return self.obs(func='exp', deform=True, alphas=alphas,
-                        model=self.model, batch_idx=batch_idx,
-                        sampletype=sampletype, **self.kwargs)
+    def forward(self, **kwargs):
+        return self.variance(**kwargs)
+
+    def variance(self, **kwargs):
+        return self.get_obs(**kwargs).var()
+
+    def expectation(self, **kwargs):
+        return self.get_obs(**kwargs).mean()
 
 
 class Trainer:
@@ -66,7 +66,8 @@ class Trainer:
 
             batch_idx = torch.randperm(
                 self.model.samples["train"].size(0))[:self.batch_size]
-            loss = self.loss_fn(alphas, batch_idx=batch_idx)
+            loss = self.loss_fn(
+                alphas=alphas, batch_idx=batch_idx, sampletype="train")
             loss.backward()
             self.optimizer.step()
 
@@ -74,19 +75,24 @@ class Trainer:
                 print(f"Epoch {epoch}: Loss = {loss.item()}")
 
             alphas_copy = alphas.clone().detach()
-            self.train_var.append(loss.item())
-            self.train_exp.append(
-                self.loss_fn.expectation(alphas_copy, batch_idx=batch_idx))
-            self.test_var.append(
-                self.loss_fn.variance(alphas_copy, sampletype="test"))
-            self.test_exp.append(
-                self.loss_fn.expectation(alphas_copy, sampletype="test"))
             self.alpha_record.append(alphas_copy)
 
+            self.train_var.append(loss.item())
+            self.train_exp.append(self.loss_fn.expectation(
+                alphas=alphas_copy,
+                batch_idx=batch_idx,
+                sampletype="train"))
+            self.test_var.append(self.loss_fn.variance(
+                alphas=alphas_copy,
+                sampletype="test"))
+            self.test_exp.append(self.loss_fn.expectation(
+                alphas=alphas_copy,
+                sampletype="test"))
+
         self.train_var = torch.tensor(self.train_var)
-        self.train_exp = torch.tensor(self.train_exp)
+        self.train_exp = torch.tensor(self.train_exp).real
         self.test_var = torch.tensor(self.test_var)
-        self.test_exp = torch.tensor(self.test_exp)
+        self.test_exp = torch.tensor(self.test_exp).real
         self.alpha_record = torch.stack(self.alpha_record)
 
     def plot_training(self, fname='training.pdf', show=True,
@@ -102,7 +108,8 @@ class Trainer:
         ax[0].plot(range(self.epochs), self.test_exp,
                    label="test", c="tab:orange")
         ax[0].axhline(self.loss_fn.target_exp, c='k', label='undeformed')
-        ax[0].set_ylabel(r'$\mathtt{Exp}\left[Q_{'+sub_str+r'}\right]$')
+        ax[0].set_ylabel(
+            r'$\mathrm{Re}\left[\mathtt{Exp}Q_{'+sub_str+r'}\right]$')
 
         if plot_error:
             ax[0].fill_between(range(self.epochs),
@@ -149,12 +156,12 @@ class Trainer:
         call_PDF(fname, show=show)
 
 
-N = 2
+N = 3
 N_EPOCHS = 1000
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, VARIDX = 0, 1, 1
+I, J, PIDX = 0, 1, 0
 BATCH_SIZE = 1000
 TRAINING_SPLIT = 0.8
 
@@ -169,7 +176,7 @@ if __name__ == "__main__":
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = HomogenousDeformations(N, deftype="constant")
+    model = defs.HomogenousDeformations(N, deftype="constant")
     model.samples = {"all": samples.clone(),
                      "train": samples[train_indices].clone(),
                      "test": samples[~train_indices].clone()}
@@ -177,7 +184,7 @@ if __name__ == "__main__":
     obskwargs = {
         "i": I,
         "j": J,
-        "varidx": VARIDX,
+        "pidx": PIDX,
         "action": ACTION,
         "beta": BETA,
     }

@@ -10,4 +10,4 @@ def ToyModelAction(fields, beta, conj=None):
 
     f1dagf2 = torch.sum(f1conj*f2, dim=-1)
     f2dagf1 = torch.sum(f2conj*f1, dim=-1)
-    return -beta * (f1dagf2 * f2dagf1).real
+    return -beta * (f1dagf2 * f2dagf1)
