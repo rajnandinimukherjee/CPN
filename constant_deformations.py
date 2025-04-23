@@ -101,7 +101,7 @@ class Trainer:
         sub_str = f"{i+1}{j+1}"
 
         fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(5, 8),
-                               gridspec_kw={"height_ratios": [2, 1, 1]})
+                               gridspec_kw={"height_ratios": [1.5, 1, 1]})
 
         ax[0].plot(range(self.epochs), self.train_exp,
                    label="train", c="tab:blue")
@@ -109,7 +109,7 @@ class Trainer:
                    label="test", c="tab:orange")
         ax[0].axhline(self.loss_fn.target_exp, c='k', label='undeformed')
         ax[0].set_ylabel(
-            r'$\mathrm{Re}\left[\mathtt{Exp}Q_{'+sub_str+r'}\right]$')
+            r'$\mathrm{Re}\mathtt{Exp}\left[Q_{'+sub_str+r'}\right]$')
 
         if plot_error:
             ax[0].fill_between(range(self.epochs),
@@ -139,15 +139,19 @@ class Trainer:
         ax[1].axhline(self.loss_fn.initial_var, c='k', label='undeformed')
         ax[1].set_ylabel(r'$\mathtt{Var}\left[Q_{'+sub_str+r'}\right]$')
 
-        StN_train = self.train_exp/(self.train_var**0.5)
-        StN_test = self.test_exp/(self.test_var**0.5)
-        ax[2].plot(range(self.epochs), StN_train, label='train')
-        ax[2].plot(range(self.epochs), StN_test, label='test')
-        ax[2].axhline(self.loss_fn.target_exp/(self.loss_fn.initial_var**0.5),
-                      c='k', label='undeformed')
+        # StN_train = self.train_exp/(self.train_var**0.5)
+        # StN_test = self.test_exp/(self.test_var**0.5)
+        # ax[2].plot(range(self.epochs), StN_train, label='train')
+        # ax[2].plot(range(self.epochs), StN_test, label='test')
+        # ax[2].axhline(self.loss_fn.target_exp/(self.loss_fn.initial_var**0.5),
+        #              c='k', label='undeformed')
+        # ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
+        for idx in range(self.alpha_record.shape[-1]):
+            ax[2].plot(range(self.epochs), self.alpha_record[:, idx],
+                       label=f"${idx+1}$")
+        ax[2].legend()
+        ax[2].set_ylabel(r"$\alpha$")
         ax[2].set_xlabel('epochs')
-        ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
-
         ax[2].set_xlim([0, self.epochs])
 
         plt.tight_layout()
@@ -161,7 +165,7 @@ N_EPOCHS = 1000
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, PIDX = 0, 1, 0
+I, J, PIDX = 2, 2, 1
 BATCH_SIZE = 1000
 TRAINING_SPLIT = 0.8
 

@@ -171,7 +171,7 @@ class Trainer:
 
 
 N = 3
-N_EPOCHS = 450
+N_EPOCHS = 1000
 BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
