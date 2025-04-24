@@ -202,14 +202,14 @@ if __name__ == "__main__":
 
     trainer.train(alphas, update=False)
     print(f"{N_conf} configs, batch size {BATCH_SIZE}, " +
-          f"{N_EPOCHS} epochs, optimized alphas = {','.join(str(
+          f"{N_EPOCHS} epochs, optimized alphas={','.join(str(
               torch.round(x*1000).item()/1000) for x in alphas.detach())}")
     vari, varf = loss_fn.initial_var, trainer.train_var[-1]
-    print(f"Variance reduction {vari} -> {varf} ({
-          (vari-varf)*100/vari}%)")
+    print(f"Variance reduction {vari} -> {varf}({
+          (vari-varf)*100/vari} % )")
 
     stni = loss_fn.target_exp/(loss_fn.initial_var**0.5)
     stnf = trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)
-    print(f"StN improvement {stni} -> {stnf} ({
-          (stnf-stni)*100/stni}%)")
+    print(f"StN improvement {stni} -> {stnf}({
+          (stnf-stni)*100/stni} % )")
     trainer.plot_training()

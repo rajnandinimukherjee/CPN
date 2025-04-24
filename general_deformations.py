@@ -7,8 +7,8 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
-from actions import ToyModelAction
 import deformations as defs
+from actions import ToyModelAction
 from observables import OnePointFn
 from plot_settings import plotparams
 from utils import call_PDF
@@ -23,12 +23,22 @@ class AlphaNet(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
-            # nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
-            # nn.ReLU(),
-            nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
+            nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
+            nn.ReLU(),
+            nn.Linear(hidden_dim2, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
             nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
         )
+        self.hd1 = hidden_dim1
+        self.hd2 = hidden_dim2
+
+    def __repr__(self):
+        num_layers = sum(1 for layer in self.network \
+                if isinstance(layer, nn.Module) and list(layer.parameters()))
+        name = f"hd1_{self.hd1}"
+        if num_layers>3:
+            name += f"_hd2_{self.hd2}"
+        return name
 
     def forward(self, X):
         return self.network(X)
@@ -74,6 +84,7 @@ class Trainer:
         self.train_size = self.model.samples["train"].size(0)
         self.test_size = self.model.samples["test"].size(0)
         self.parnet = parnet
+        self.name = f"{self.model}_{self.parnet}"
 
         self.train_var, self.train_exp = [], []
         self.test_var, self.test_exp = [], []
@@ -109,7 +120,7 @@ class Trainer:
         self.test_var = torch.tensor(self.test_var)
         self.test_exp = torch.tensor(self.test_exp).real
 
-    def plot_training(self, fname='training.pdf', show=True,
+    def plot_training(self, fname="", show=True,
                       plot_error=True):
         i, j = self.loss_fn.kwargs["i"], self.loss_fn.kwargs["j"]
         sub_str = f"{i+1}{j+1}"
@@ -167,7 +178,10 @@ class Trainer:
         plt.tight_layout()
         plt.subplots_adjust(hspace=0)
 
+        if fname=="":
+            fname = f"plots/{self.name}.pdf"
         call_PDF(fname, show=show)
+        print(f"plot saved to {fname}")
 
 
 N = 3
@@ -192,7 +206,7 @@ if __name__ == "__main__":
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = defs.HomogenousDeformations(N, deftype="general")
+    model = defs.ProjectorDeformations(N, deftype="general")
     model.samples = {
         "all": samples,
         "train": samples[train_indices],
@@ -209,7 +223,7 @@ if __name__ == "__main__":
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    alphanet = AlphaNet(2*model.DOF, model.DOF)
+    alphanet = AlphaNet(2*samples.shape[-1], model.DOF)
     optimizer = optim.Adam(alphanet.parameters(), lr=1e-3)
     trainer = Trainer(model, alphanet, loss_fn,
                       optimizer, N_EPOCHS, BATCH_SIZE)
@@ -218,12 +232,10 @@ if __name__ == "__main__":
     print(f"{N_conf} configs, batch size {BATCH_SIZE}")
     vari, varf = loss_fn.initial_var, loss_fn.variance(
         alphas=alphanet, sampletype="all")
-    print(f"Variance reduction {vari} -> {varf} ({
-          (vari-varf)*100/vari}%)")
+    print(f"Variance reduction {vari} -> {varf} ({(vari-varf)*100/vari}%)")
 
     stni = loss_fn.target_exp/(vari**0.5)
     stnf = loss_fn.expectation(
         alphas=alphanet, sampletype="all").real/(varf**0.5)
-    print(f"StN improvement {stni} -> {stnf} ({
-          (stnf-stni)*100/stni}%)")
-    trainer.plot_training()
+    print(f"StN improvement {stni} -> {stnf} ({(stnf-stni)*100/stni}%)")
+    trainer.plot_training(show=False)

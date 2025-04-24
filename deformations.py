@@ -2,7 +2,6 @@ import pdb
 
 import torch
 import torch.nn as nn
-from torch.autograd.functional import jacobian
 from torch.func import jacrev, vmap
 
 from utils import CNtoR2N, Lambda
@@ -10,6 +9,8 @@ from SUN import SUN_generators
 
 
 class SkewMatrixDeformations(nn.Module):
+    name = "SkewMatDef"
+
     def __init__(self, N, deftype="general"):
         super(SkewMatrixDeformations, self).__init__()
         self.N = N
@@ -20,6 +21,10 @@ class SkewMatrixDeformations(nn.Module):
         self.skew_idx = torch.triu_indices(self.size, self.size, offset=1)
         self.flat_idx = self.skew_idx[0]*self.size + self.skew_idx[1]
 
+    def __repr__(self):
+        return self.name+"_cons" if self.deftype == "constant" \
+            else self.name+"_gen"
+
     def build_A(self, alphas):
         batch_shape = alphas.shape[:-1]
         assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
@@ -29,11 +34,15 @@ class SkewMatrixDeformations(nn.Module):
             *batch_shape, -1) if alphas.dim() > 1 else self.flat_idx
         A_flat = A_flat.scatter(-1, flat_idx, alphas)
         A = A_flat.view(*batch_shape, self.size, self.size)
-        A = A-A.T
+        A = A - torch.transpose(A, -1, -2)
         return A
 
     def deformx(self, X, alphas):
-        A = self.build_A(alphas)
+        if not isinstance(alphas, torch.Tensor):
+            a = alphas(X)
+            A = self.build_A(a)
+        else:
+            A = self.build_A(alphas)
         Y = torch.einsum('...ij,...j->...i', A, X)
         return Y
 
@@ -76,6 +85,8 @@ class SkewMatrixDeformations(nn.Module):
 
 
 class ProjectorDeformations(nn.Module):
+    name = "ProjDef"
+
     def __init__(self, N, deftype="general"):
         super(ProjectorDeformations, self).__init__()
         self.N = N
@@ -85,10 +96,18 @@ class ProjectorDeformations(nn.Module):
         self.DOF = int(self.size*self.size)
         self.eye = torch.eye(self.size)
 
-    def deformx(self, X, alphas):
-        assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
+    def __repr__(self):
+        return self.name+"_cons" if self.deftype == "constant" \
+            else self.name+"_gen"
 
-        B = alphas.view(*alphas.shape[:-1], self.size, self.size)
+    def deformx(self, X, alphas):
+        if not isinstance(alphas, torch.Tensor):
+            a = alphas(X)
+            B = a.view(*a.shape[:-1], self.size, self.size)
+        else:
+            assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
+            B = alphas.view(*alphas.shape[:-1], self.size, self.size)
+
         PX = torch.einsum('...i,...j->...ij', X, X)
         Id = self.eye.expand(*X.shape[:-1], self.size,
                              self.size) if X.dim() > 1 else self.eye
@@ -135,6 +154,8 @@ class ProjectorDeformations(nn.Module):
 
 
 class TorusDeformations(nn.Module):
+    name = "TorusDef"
+
     def __init__(self, N, deftype="constant"):
         super(TorusDeformations, self).__init__()
         self.N = N
@@ -143,6 +164,10 @@ class TorusDeformations(nn.Module):
         self.eye = torch.eye(2*(N+1)).to(torch.complex128)
 
         self.basis = SUN_generators(N+1, cartan=True)
+
+    def __repr__(self):
+        return self.name+"_cons" if self.deftype == "constant" \
+            else self.name+"_gen"
 
     def deformx(self, X, alphas):
         assert alphas.shape[0] == self.DOF, "Alphas of incorrect size"
@@ -175,6 +200,8 @@ class TorusDeformations(nn.Module):
 
 
 class HomogenousDeformations(nn.Module):
+    name = "HomogDef"
+
     def __init__(self, N, deftype="constant"):
         super(HomogenousDeformations, self).__init__()
         self.N = N
@@ -184,6 +211,10 @@ class HomogenousDeformations(nn.Module):
 
         blocks = [torch.tensor([[0, 1], [-1, 0]])] * (N+1)
         self.omega = torch.block_diag(*blocks).to(torch.float64)
+
+    def __repr__(self):
+        return self.name+"_cons" if self.deftype == "constant" \
+            else self.name+"_gen"
 
     def deformx(self, X, alphas):
         if not isinstance(alphas, torch.Tensor):
