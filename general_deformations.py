@@ -18,14 +18,14 @@ plt.rcParams.update(plotparams)
 
 class AlphaNet(nn.Module):
 
-    def __init__(self, input_dim, output_dim, hidden_dim1=16, hidden_dim2=8):
+    def __init__(self, input_dim, output_dim, hidden_dim1=128, hidden_dim2=8):
         super(AlphaNet, self).__init__()
         self.network = nn.Sequential(
             nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
-            nn.ReLU(),
-            nn.Linear(hidden_dim2, hidden_dim1, dtype=torch.double),
+            #nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
+            #nn.ReLU(),
+            nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
             nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
         )
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = defs.ProjectorDeformations(N, deftype="general")
+    model = defs.HomogenousDeformations(N, deftype="general")
     model.samples = {
         "all": samples,
         "train": samples[train_indices],
