@@ -3,9 +3,69 @@ import pdb
 import torch
 import torch.nn as nn
 from torch.func import jacrev, vmap
+from torchdiffeq import odeint
 
-from utils import CNtoR2N, Lambda
+from utils import R2NtoCN, CNtoR2N, Lambda
 from SUN import SUN_generators
+
+
+class FlowDeformations(nn.Module):
+    name = "FlowDef"
+
+    def __init__(self, N, T=10, deftype="general"):
+        super(FlowDeformations, self).__init__()
+        self.N = N
+        self.T = T
+        self.deftype = deftype
+        self.DOF = 2*N
+
+    def getFlow(alphas):
+        def flow(t, Z_flat):
+            Z = R2NtoCN(Z_flat)
+
+            f = alphas(t, Z)
+            Zf = torch.sum(Z*f, dim=-2, keepdim=True)
+            Zsq = torch.sum(Z*Z, dim=-2, keepdim=True)
+            overlap = Zf/Zsq
+
+            # contraint preserving projection
+            dZdt = f - overlap*Z
+            return CNtoR2N(dZdt)
+        return flow
+
+    def complexify(self, X, alphas):
+        Z0 = torch.complex(X, torch.zeros_like(X))  # shape: (1, N)
+        # assert torch.allclose(torch.sum(Z0**2).real,
+        #                      torch.tensor(1.0), atol=1e-5)
+        Z0_flat = CNtoR2N(Z0)
+
+        flow = self.getFlow(alphas)
+        tspan = torch.linspace(0, self.T, 100)
+        ZT = odeint(flow, Z0_flat, tspan)[-1]
+
+        return ZT
+
+    def detJac(self, X, alphas):
+        batch_shape = X.shape[:-1]
+        flat_X = X.reshape(-1, X.shape[-1])
+
+        def Zreal(x):
+            Z = self.complexify(x, alphas)
+            return Z.real
+
+        def Zimag(x):
+            Z = self.complexify(x, alphas)
+            return Z.imag
+
+        Jreal = vmap(jacrev(Zreal))(flat_X)
+        Jimag = vmap(jacrev(Zimag))(flat_X)
+
+        J = Jreal + 1j*Jimag
+        J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
+
+        detJ = torch.linalg.det(J)
+
+        return torch.prod(detJ, dim=-1)
 
 
 class SkewMatrixDeformations(nn.Module):
@@ -46,12 +106,14 @@ class SkewMatrixDeformations(nn.Module):
         Y = torch.einsum('...ij,...j->...i', A, X)
         return Y
 
-    def complexify(self, X, Y):
+    def complexify(self, X, alphas):
+        Y = self.deformx(X, alphas)
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z
 
-    def detJac(self, X, Y, alphas):
+    def detJac(self, X, alphas):
+        Y = self.deformx(X, alphas)
         batch_shape = X.shape[:-1]
         flat_X = X.reshape(-1, X.shape[-1])
 
@@ -115,12 +177,14 @@ class ProjectorDeformations(nn.Module):
         Y = torch.einsum('...ij,...j->...i', A, X)
         return Y
 
-    def complexify(self, X, Y):
+    def complexify(self, X, alphas):
+        Y = self.deformx(X, alphas)
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z
 
-    def detJac(self, X, Y, alphas):
+    def detJac(self, X, alphas):
+        Y = self.deformx(X, alphas)
         batch_shape = X.shape[:-1]
         flat_X = X.reshape(-1, X.shape[-1])
 
@@ -178,12 +242,14 @@ class TorusDeformations(nn.Module):
             1j * alpha_H, matrix=True), X.to(torch.complex128))
         return Y
 
-    def complexify(self, X, Y):
+    def complexify(self, X, alphas):
+        Y = self.deformx(X, alphas)
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z
 
-    def detJac(self, X, Y, alphas):
+    def detJac(self, X, alphas):
+        Y = self.deformx(X, alphas)
         if self.deftype == "constant":
             L = Lambda(Y).to(torch.complex128)
             L2dim = L.unsqueeze(-1).unsqueeze(-1)
@@ -228,12 +294,14 @@ class HomogenousDeformations(nn.Module):
         Y = torch.einsum('...ij,...j->...i', A@self.omega, X)
         return Y
 
-    def complexify(self, X, Y):
+    def complexify(self, X, alphas):
+        Y = self.deformx(X, alphas)
         LX = X * Lambda(Y).unsqueeze(-1)
         Z = LX + 1j * Y
         return Z
 
-    def detJac(self, X, Y, alphas):
+    def detJac(self, X, alphas):
+        Y = self.deformx(X, alphas)
         if self.deftype == "constant":
             L = Lambda(Y)
             L2dim = L.unsqueeze(-1).unsqueeze(-1)

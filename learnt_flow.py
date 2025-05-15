@@ -10,38 +10,36 @@ from tqdm import tqdm
 import deformations as defs
 from actions import ToyModelAction
 from observables import OnePointFn
+import torch.nn.functional as F
 from plot_settings import plotparams
 from utils import call_PDF
 
 plt.rcParams.update(plotparams)
 
 
-class AlphaNet(nn.Module):
+class LearnedFlow(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super().__init__()
+        self.fc1_real = nn.Linear(
+            2 * input_dim + 1, hidden_dim, dtype=torch.double)
+        self.fc1_imag = nn.Linear(
+            2 * input_dim + 1, hidden_dim, dtype=torch.double)
+        self.fc2_real = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
+        self.fc2_imag = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
 
-    def __init__(self, input_dim, output_dim, hidden_dim1=128, hidden_dim2=8):
-        super(AlphaNet, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
-            nn.ReLU(),
-            #nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
-            #nn.ReLU(),
-            nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
-            nn.ReLU(),
-            nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
-        )
-        self.hd1 = hidden_dim1
-        self.hd2 = hidden_dim2
+    def forward(self, t, Z):
+        # Z: shape (batch_size, N), complex-valued
+        Z_cat = torch.cat([Z.real, Z.imag], dim=-1)  # shape: (batch_size, 2N)
+        t_input = t * torch.ones(Z.shape[0], 1, device=Z.device)
+        inp = torch.cat([t_input, Z_cat], dim=-1)  # shape: (batch_size, 2N+1)
 
-    def __repr__(self):
-        num_layers = sum(1 for layer in self.network
-                         if isinstance(layer, nn.Module) and list(layer.parameters()))
-        name = f"hd1_{self.hd1}"
-        if num_layers > 3:
-            name += f"_hd2_{self.hd2}"
-        return name
+        h_real = F.tanh(self.fc1_real(inp))
+        h_imag = F.tanh(self.fc1_imag(inp))
+        out_real = self.fc2_real(h_real)
+        out_imag = self.fc2_imag(h_imag)
 
-    def forward(self, X):
-        return self.network(X)
+        out = torch.complex(out_real, out_imag)  # shape: (batch_size, 2N)
+        return out
 
 
 class VarianceLoss(nn.Module):
@@ -206,7 +204,7 @@ if __name__ == "__main__":
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
     N = samples.shape[-1] - 1
-    model = defs.HomogenousDeformations(N, deftype="general")
+    model = defs.FlowDeformations(N, deftype="general")
     model.samples = {
         "all": samples,
         "train": samples[train_indices],
@@ -223,19 +221,19 @@ if __name__ == "__main__":
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    alphanet = AlphaNet(2*samples.shape[-1], model.DOF)
-    optimizer = optim.Adam(alphanet.parameters(), lr=1e-3)
-    trainer = Trainer(model, alphanet, loss_fn,
+    flownet = LearnedFlow(2*samples.shape[-1], model.DOF)
+    optimizer = optim.Adam(flownet.parameters(), lr=1e-3)
+    trainer = Trainer(model, flownet, loss_fn,
                       optimizer, N_EPOCHS, BATCH_SIZE)
 
     trainer.train(update=False)
     print(f"{N_conf} configs, batch size {BATCH_SIZE}")
     vari, varf = loss_fn.initial_var, loss_fn.variance(
-        alphas=alphanet, sampletype="all")
+        alphas=flownet, sampletype="all")
     print(f"Variance reduction {vari} -> {varf} ({(vari-varf)*100/vari}%)")
 
     stni = loss_fn.target_exp/(vari**0.5)
     stnf = loss_fn.expectation(
-        alphas=alphanet, sampletype="all").real/(varf**0.5)
+        alphas=flownet, sampletype="all").real/(varf**0.5)
     print(f"StN improvement {stni} -> {stnf} ({(stnf-stni)*100/stni}%)")
     trainer.plot_training(show=False)

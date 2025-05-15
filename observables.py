@@ -2,7 +2,8 @@ import torch
 import pdb
 
 from actions import ToyModelAction
-from utils import CNtoR2N, Lambda
+from utils import CNtoR2N
+import deformations as defs
 
 
 def OnePointFn(i=0, j=0, action=ToyModelAction, pidx=0,
@@ -19,15 +20,14 @@ def OnePointFn(i=0, j=0, action=ToyModelAction, pidx=0,
 
     if deform:
         X = CNtoR2N(x)
-        Y = model.deformx(X, alphas)
-        Z = model.complexify(X, Y)
+        Z = model.complexify(X, alphas)
 
         z = Z[..., ::2] + 1j * Z[..., 1::2]
         zconj = Z[..., ::2] - 1j * Z[..., 1::2]
 
         obs = z[:, pidx, i] * zconj[:, pidx, j]
         Sdiff = torch.exp(-action(z, beta, conj=zconj) + action(x, beta))
-        detJ = model.detJac(X, Y, alphas)
+        detJ = model.detJac(X, alphas)
 
         obs *= Sdiff*detJ
     else:
