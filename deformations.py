@@ -40,7 +40,7 @@ class FlowDeformations(nn.Module):
         Z0_flat = CNtoR2N(Z0)
 
         flow = self.getFlow(alphas)
-        tspan = torch.linspace(0, self.T, 100)
+        tspan = torch.linspace(0, self.T, 1)
         ZT = odeint(flow, Z0_flat, tspan)[-1]
 
         return ZT

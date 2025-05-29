@@ -55,6 +55,7 @@ class Trainer:
         self.batch_size = batch_size
         self.train_size = self.model.samples["train"].size(0)
         self.test_size = self.model.samples["test"].size(0)
+        self.name = f"{self.model}"
 
         self.train_var, self.train_exp = [], []
         self.test_var, self.test_exp = [], []
@@ -95,12 +96,32 @@ class Trainer:
         self.test_exp = torch.tensor(self.test_exp).real
         self.alpha_record = torch.stack(self.alpha_record)
 
-    def plot_training(self, fname='training.pdf', show=True,
-                      plot_error=True, **kwargs):
+    def get_epoch_sat(self, window_size=10, min_change=1e-4, min_idx=100):
+        rel_changes = torch.abs(
+            (self.test_var[:-1]-self.test_var[1:])/self.test_var[:-1])
+
+        kernel = torch.ones(window_size)
+        stable_mask = (rel_changes < min_change).float()
+        convolved = torch.nn.functional.conv1d(
+            stable_mask.view(1, 1, -1),  # input
+            kernel.view(1, 1, -1),       # kernel
+            padding=0
+        ).view(-1)
+        all_idx = (convolved == window_size).nonzero(as_tuple=True)[0]
+        stable_idx = all_idx[all_idx >= min_idx]
+        epochs = torch.arange(self.epochs)
+        if len(stable_idx) > 0:
+            epoch_sat = epochs[stable_idx[0] + window_size]
+        else:
+            epoch_sat = epochs[-1]
+        return epoch_sat
+
+    def plot_training(self, fname="", show=True,
+                      plot_error=True, plot_label="", **kwargs):
         i, j = self.loss_fn.kwargs["i"], self.loss_fn.kwargs["j"]
         sub_str = f"{i+1}{j+1}"
 
-        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(5, 8),
+        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(3, 5),
                                gridspec_kw={"height_ratios": [1.5, 1, 1]})
 
         ax[0].plot(range(self.epochs), self.train_exp,
@@ -132,7 +153,8 @@ class Trainer:
                                color="k", alpha=0.1)
 
         handles, labels = ax[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper center", ncol=3, framealpha=1.0)
+        fig.legend(handles, labels, loc="upper center", ncol=3,
+                   framealpha=1.0, columnspacing=0.5)
 
         ax[1].plot(range(self.epochs), self.train_var, label="train")
         ax[1].plot(range(self.epochs), self.test_var, label="test")
@@ -152,11 +174,15 @@ class Trainer:
         ax[2].legend()
         ax[2].set_ylabel(r"$\alpha$")
         ax[2].set_xlabel('epochs')
-        ax[2].set_xlim([0, self.epochs])
+        ax[2].set_xlim([0, self.get_epoch_sat()])
+
+        fig.text(0.95, 0.5, plot_label, va='center', ha='left', rotation=270)
 
         plt.tight_layout()
         plt.subplots_adjust(hspace=0)
 
+        if fname == "":
+            fname = f"plots/{self.name}.pdf"
         call_PDF(fname, show=show)
 
 
@@ -179,7 +205,6 @@ if __name__ == "__main__":
 
     train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
 
-    N = samples.shape[-1] - 1
     model = defs.HomogenousDeformations(N, deftype="constant")
     model.samples = {"all": samples.clone(),
                      "train": samples[train_indices].clone(),
@@ -212,4 +237,6 @@ if __name__ == "__main__":
     stnf = trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)
     print(f"StN improvement {stni} -> {stnf}({
           (stnf-stni)*100/stni} % )")
-    trainer.plot_training()
+    label = f"N={N}, beta={BETA}, Nconf={N_conf}, batch_size={
+        BATCH_SIZE}, split={TRAINING_SPLIT}"
+    trainer.plot_training(plot_label=label)

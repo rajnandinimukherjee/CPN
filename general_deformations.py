@@ -23,8 +23,8 @@ class AlphaNet(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
-            #nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
-            #nn.ReLU(),
+            # nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
+            # nn.ReLU(),
             nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
             nn.ReLU(),
             nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
@@ -84,7 +84,7 @@ class Trainer:
         self.train_size = self.model.samples["train"].size(0)
         self.test_size = self.model.samples["test"].size(0)
         self.parnet = parnet
-        self.name = f"{self.model}_{self.parnet}"
+        self.name = f"gen_{self.model}_{self.parnet}"
 
         self.train_var, self.train_exp = [], []
         self.test_var, self.test_exp = [], []
@@ -120,13 +120,33 @@ class Trainer:
         self.test_var = torch.tensor(self.test_var)
         self.test_exp = torch.tensor(self.test_exp).real
 
+    def get_epoch_sat(self, window_size=10, min_change=1e-4, min_idx=100):
+        rel_changes = torch.abs(
+            (self.test_var[:-1]-self.test_var[1:])/self.test_var[:-1])
+
+        kernel = torch.ones(window_size)
+        stable_mask = (rel_changes < min_change).float()
+        convolved = torch.nn.functional.conv1d(
+            stable_mask.view(1, 1, -1),  # input
+            kernel.view(1, 1, -1),       # kernel
+            padding=0
+        ).view(-1)
+        all_idx = (convolved == window_size).nonzero(as_tuple=True)[0]
+        stable_idx = all_idx[all_idx >= min_idx]
+        epochs = torch.arange(self.epochs)
+        if len(stable_idx) > 0:
+            epoch_sat = epochs[stable_idx[0] + window_size]
+        else:
+            epoch_sat = epochs[-1]
+        return epoch_sat
+
     def plot_training(self, fname="", show=True,
-                      plot_error=True):
+                      plot_label="", plot_error=True):
         i, j = self.loss_fn.kwargs["i"], self.loss_fn.kwargs["j"]
         sub_str = f"{i+1}{j+1}"
 
-        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(5, 8),
-                               gridspec_kw={"height_ratios": [2, 1, 1]})
+        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(3, 5),
+                               gridspec_kw={"height_ratios": [1.5, 1, 1]})
 
         ax[0].plot(range(self.epochs), self.train_exp,
                    label="train", c="tab:blue")
@@ -173,7 +193,9 @@ class Trainer:
         ax[2].set_xlabel('epochs')
         ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
 
-        ax[2].set_xlim([0, self.epochs])
+        ax[2].set_xlim([0, self.get_epoch_sat()])
+
+        fig.text(0.95, 0.5, plot_label, va='center', ha='left', rotation=270)
 
         plt.tight_layout()
         plt.subplots_adjust(hspace=0)
@@ -238,4 +260,6 @@ if __name__ == "__main__":
     stnf = loss_fn.expectation(
         alphas=alphanet, sampletype="all").real/(varf**0.5)
     print(f"StN improvement {stni} -> {stnf} ({(stnf-stni)*100/stni}%)")
-    trainer.plot_training(show=False)
+    label = f"N={N}, beta={BETA}, Nconf={N_conf}, batch_size={
+        BATCH_SIZE}, split={TRAINING_SPLIT}"
+    trainer.plot_training(plot_label=label, show=False)
