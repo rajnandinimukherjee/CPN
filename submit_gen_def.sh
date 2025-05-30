@@ -22,7 +22,7 @@ source "/mnt/lustre/tursafs1/home/dp358/dp358/dc-mukh1/pyenvs/venv311/bin/activa
 
 # application and parameters ###################################################
 app='/mnt/lustre/tursafs1/home/dp358/dp358/dc-mukh1/CPN/general_deformations.py'
-opt=('--N=3' '--i=0' '--j=0' '--pidx=0' '--epochs=600')
+opt=('--N=3' '--i=0' '--j=0' '--pidx=0' '--epochs=800')
 
 # run! #########################################################################
 python3 ${app} "${opt[@]}" --deftype=SkewMatDef
