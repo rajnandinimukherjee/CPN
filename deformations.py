@@ -132,8 +132,7 @@ class SkewMatrixDeformations(nn.Module):
             Jimag = vmap(jacrev(Zimag))(flat_X)
         else:
             def Z(x):
-                y = self.deformx(x, alphas)
-                return self.complexify(x, y)
+                return self.complexify(x, alphas)
 
             Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
             Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)
@@ -203,8 +202,7 @@ class ProjectorDeformations(nn.Module):
             Jimag = vmap(jacrev(Zimag))(flat_X)
         else:
             def Z(x):
-                y = self.deformx(x, alphas)
-                return self.complexify(x, y)
+                return self.complexify(x, alphas)
 
             Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
             Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)
@@ -234,11 +232,15 @@ class TorusDeformations(nn.Module):
             else self.name+"_gen"
 
     def deformx(self, X, alphas):
-        assert alphas.shape[0] == self.DOF, "Alphas of incorrect size"
+        if not isinstance(alphas, torch.Tensor):
+            alpha_H = torch.einsum(
+                '...i,ijk->jk', alphas(X).to(torch.complex128), self.basis)
+        else:
+            assert alphas.shape[-1] == self.DOF, "Alphas of incorrect size"
+            alpha_H = torch.einsum(
+                'i,ijk->jk', alphas.to(torch.complex128), self.basis)
 
-        alpha_H = torch.einsum(
-            'i,ijk->jk', alphas.to(torch.complex128), self.basis)
-        Y = torch.einsum('ij,...i->...j', CNtoR2N(
+        Y = torch.einsum('...ij,...i->...j', CNtoR2N(
             1j * alpha_H, matrix=True), X.to(torch.complex128))
         return Y
 
@@ -261,8 +263,35 @@ class TorusDeformations(nn.Module):
             J -= torch.einsum('...i,...j->...ij', X,
                               X).to(torch.complex128)@A@A/L2dim
             J += 1j * A
-            detJ = torch.linalg.det(J).real/(L**2)
-            return torch.prod(detJ, dim=-1)
+        else:
+            batch_shape = X.shape[:-1]
+            flat_X = X.reshape(-1, X.shape[-1])
+
+            if not isinstance(alphas, torch.Tensor):
+                def Zreal(x):
+                    a = alphas(x)
+                    y = self.deformx(x, a)
+                    return x*Lambda(y).unsqueeze(-1)
+
+                def Zimag(x):
+                    a = alphas(x)
+                    y = self.deformx(x, a)
+                    return y
+
+                Jreal = vmap(jacrev(Zreal))(flat_X)
+                Jimag = vmap(jacrev(Zimag))(flat_X)
+            else:
+                def Z(x):
+                    return self.complexify(x, alphas)
+
+                Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
+                Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)
+
+            J = Jreal + 1j*Jimag
+            J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
+
+        detJ = torch.linalg.det(J)/(Lambda(Y)**2)
+        return torch.prod(detJ, dim=-1)
 
 
 class HomogenousDeformations(nn.Module):
@@ -333,8 +362,7 @@ class HomogenousDeformations(nn.Module):
                 Jimag = vmap(jacrev(Zimag))(flat_X)
             else:
                 def Z(x):
-                    y = self.deformx(x, alphas)
-                    return self.complexify(x, y)
+                    return self.complexify(x, alphas)
 
                 Jreal = vmap(jacrev(lambda x: Z(x).real))(flat_X)
                 Jimag = vmap(jacrev(lambda x: Z(x).imag))(flat_X)

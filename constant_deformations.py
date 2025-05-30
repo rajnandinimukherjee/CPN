@@ -1,7 +1,4 @@
-from utils import call_PDF
-import deformations as defs
-from actions import ToyModelAction
-from observables import OnePointFn
+import argparse
 import pdb
 
 import h5py
@@ -11,7 +8,11 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+import deformations as defs
+from actions import ToyModelAction
+from observables import OnePointFn
 from plot_settings import plotparams
+from utils import call_PDF
 
 plt.rcParams.update(plotparams)
 
@@ -47,7 +48,6 @@ class VarianceLoss(nn.Module):
 
 class Trainer:
     def __init__(self, model, loss_fn, optimizer, epochs, batch_size):
-
         self.model = model
         self.loss_fn = loss_fn
         self.optimizer = optimizer
@@ -171,7 +171,7 @@ class Trainer:
         for idx in range(self.alpha_record.shape[-1]):
             ax[2].plot(range(self.epochs), self.alpha_record[:, idx],
                        label=f"${idx+1}$")
-        ax[2].legend()
+        # ax[2].legend()
         ax[2].set_ylabel(r"$\alpha$")
         ax[2].set_xlabel('epochs')
         ax[2].set_xlim([0, self.get_epoch_sat()])
@@ -186,16 +186,34 @@ class Trainer:
         call_PDF(fname, show=show)
 
 
-N = 3
-N_EPOCHS = 1000
-BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, PIDX = 2, 2, 1
-BATCH_SIZE = 1000
-TRAINING_SPLIT = 0.8
+def_names = ["HomogDef", "TorusDef", "ProjDef", "SkewMatDef"]
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--N", help="CP(N) dimension", type=int, default=3)
+    parser.add_argument("--i", help="OnePointFn element i",
+                        type=int, default=0)
+    parser.add_argument("--j", help="OnePointFn element j",
+                        type=int, default=0)
+    parser.add_argument(
+        "--pidx", help="particle idx (0 | 1)", type=int, default=0)
+    parser.add_argument(
+        "--beta", help="ToyModelAction parameter beta", type=float, default=4.5)
+    parser.add_argument("--epochs", help="epochs", type=int, default=1000)
+    parser.add_argument("--batch_size", help="batch size",
+                        type=int, default=1000)
+    parser.add_argument("--split", help="training to test data split ratio",
+                        type=float, default=0.8)
+    parser.add_argument("--deftype", help=f"constant deformation type ({'|'.join(def_names)})",
+                        type=str, default="HomogDef")
+    args = parser.parse_args()
+
+    assert args.deftype in def_names, f"Deformation type not recognized, choose from {', '.join(def_names)}"
+    # ================================================================================
+    N = args.N
+
     file = h5py.File(f"CP{N}.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
@@ -203,19 +221,28 @@ if __name__ == "__main__":
         file["vectors"][burn+1::stepsize], dtype=torch.complex128)
     N_conf = len(samples)
 
-    train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
+    train_indices = torch.randperm(N_conf)[:int(args.split*N_conf)]
 
-    model = defs.HomogenousDeformations(N, deftype="constant")
+    if args.deftype == "TorusDef":
+        deformation = defs.TorusDeformations
+    elif args.deftype == "ProjDef":
+        deformation = defs.ProjectorDeformations
+    elif args.deftype == "SkewMatDef":
+        deformation = defs.SkewMatrixDeformations
+    else:
+        deformation = defs.HomogenousDeformations
+
+    model = deformation(N, deftype="constant")
     model.samples = {"all": samples.clone(),
                      "train": samples[train_indices].clone(),
                      "test": samples[~train_indices].clone()}
 
     obskwargs = {
-        "i": I,
-        "j": J,
-        "pidx": PIDX,
+        "i": args.i,
+        "j": args.j,
+        "pidx": args.pidx,
         "action": ACTION,
-        "beta": BETA,
+        "beta": args.beta,
     }
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
@@ -223,20 +250,8 @@ if __name__ == "__main__":
     start = torch.zeros(model.DOF, dtype=torch.float64)
     alphas = start.clone().requires_grad_(True)
     optimizer = optim.Adam([alphas], lr=1e-3)
-    trainer = Trainer(model, loss_fn, optimizer, N_EPOCHS, BATCH_SIZE)
+    trainer = Trainer(model, loss_fn, optimizer, args.epochs, args.batch_size)
 
     trainer.train(alphas, update=False)
-    print(f"{N_conf} configs, batch size {BATCH_SIZE}, " +
-          f"{N_EPOCHS} epochs, optimized alphas={','.join(str(
-              torch.round(x*1000).item()/1000) for x in alphas.detach())}")
-    vari, varf = loss_fn.initial_var, trainer.train_var[-1]
-    print(f"Variance reduction {vari} -> {varf}({
-          (vari-varf)*100/vari} % )")
-
-    stni = loss_fn.target_exp/(loss_fn.initial_var**0.5)
-    stnf = trainer.train_exp[-1]/(trainer.train_var[-1]**0.5)
-    print(f"StN improvement {stni} -> {stnf}({
-          (stnf-stni)*100/stni} % )")
-    label = f"N={N}, beta={BETA}, Nconf={N_conf}, batch_size={
-        BATCH_SIZE}, split={TRAINING_SPLIT}"
-    trainer.plot_training(plot_label=label)
+    label = f"N = {N}, beta = {args.beta}, Nconf = {N_conf}, batch_size = {args.batch_size}, split = {args.split}"
+    trainer.plot_training(plot_label=label, show=False)

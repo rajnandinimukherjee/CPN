@@ -1,3 +1,4 @@
+import argparse
 import pdb
 
 import h5py
@@ -18,27 +19,16 @@ plt.rcParams.update(plotparams)
 
 class AlphaNet(nn.Module):
 
-    def __init__(self, input_dim, output_dim, hidden_dim1=128, hidden_dim2=8):
+    def __init__(self, input_dim, output_dim, hidden_dim=16):
         super(AlphaNet, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim1, dtype=torch.double),
+            nn.Linear(input_dim, hidden_dim, dtype=torch.double),
             nn.ReLU(),
-            # nn.Linear(hidden_dim1, hidden_dim2, dtype=torch.double),
-            # nn.ReLU(),
-            nn.Linear(hidden_dim1, hidden_dim1, dtype=torch.double),
+            nn.Linear(hidden_dim, hidden_dim, dtype=torch.double),
             nn.ReLU(),
-            nn.Linear(hidden_dim1, output_dim, dtype=torch.double)
+            nn.Linear(hidden_dim, output_dim, dtype=torch.double)
         )
-        self.hd1 = hidden_dim1
-        self.hd2 = hidden_dim2
-
-    def __repr__(self):
-        num_layers = sum(1 for layer in self.network
-                         if isinstance(layer, nn.Module) and list(layer.parameters()))
-        name = f"hd1_{self.hd1}"
-        if num_layers > 3:
-            name += f"_hd2_{self.hd2}"
-        return name
+        self.hd = hidden_dim
 
     def forward(self, X):
         return self.network(X)
@@ -84,7 +74,7 @@ class Trainer:
         self.train_size = self.model.samples["train"].size(0)
         self.test_size = self.model.samples["test"].size(0)
         self.parnet = parnet
-        self.name = f"gen_{self.model}_{self.parnet}"
+        self.name = f"{self.model}_hdim{self.parnet.hd}"
 
         self.train_var, self.train_exp = [], []
         self.test_var, self.test_exp = [], []
@@ -206,16 +196,35 @@ class Trainer:
         print(f"plot saved to {fname}")
 
 
-N = 3
-N_EPOCHS = 1000
-BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, VARIDX = 0, 0, 0
-BATCH_SIZE = 1000
-TRAINING_SPLIT = 0.8
+def_names = ["HomogDef", "TorusDef", "ProjDef", "SkewMatDef", "FlowDef"]
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--N", help="CP(N) dimension", type=int, default=3)
+    parser.add_argument("--i", help="OnePointFn element i",
+                        type=int, default=0)
+    parser.add_argument("--j", help="OnePointFn element j",
+                        type=int, default=0)
+    parser.add_argument(
+        "--pidx", help="particle idx (0 | 1)", type=int, default=0)
+    parser.add_argument(
+        "--beta", help="ToyModelAction parameter beta", type=float, default=4.5)
+    parser.add_argument("--epochs", help="epochs", type=int, default=1000)
+    parser.add_argument("--batch_size", help="batch size",
+                        type=int, default=1000)
+    parser.add_argument("--split", help="training to test data split ratio",
+                        type=float, default=0.8)
+    parser.add_argument("--deftype", help=f"constant deformation type ({'|'.join(def_names)})",
+                        type=str, default="HomogDef")
+    parser.add_argument("--hidden_dim", help=f"alphanet hidden layer dimension",
+                        type=int, default=16)
+    args = parser.parse_args()
+
+    assert args.deftype in def_names, f"Deformation type not recognized, choose from {', '.join(def_names)}"
+    # ================================================================================
+    N = args.N
 
     file = h5py.File(f"CP{N}.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
@@ -225,10 +234,20 @@ if __name__ == "__main__":
         dtype=torch.complex128)
     N_conf = len(samples)
 
-    train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
+    train_indices = torch.randperm(N_conf)[:int(args.split*N_conf)]
 
-    N = samples.shape[-1] - 1
-    model = defs.HomogenousDeformations(N, deftype="general")
+    if args.deftype == "TorusDef":
+        deformation = defs.TorusDeformations
+    elif args.deftype == "ProjDef":
+        deformation = defs.ProjectorDeformations
+    elif args.deftype == "SkewMatDef":
+        deformation = defs.SkewMatrixDeformations
+    elif args.deftype == "FlowDef":
+        deformation = defs.FlowDeformations
+    else:
+        deformation = defs.HomogenousDeformations
+
+    model = deformation(N, deftype="general")
     model.samples = {
         "all": samples,
         "train": samples[train_indices],
@@ -236,30 +255,20 @@ if __name__ == "__main__":
     }
 
     obskwargs = {
-        "i": I,
-        "j": J,
-        "varidx": VARIDX,
+        "i": args.i,
+        "j": args.j,
+        "pidx": args.pidx,
         "action": ACTION,
-        "beta": BETA,
+        "beta": args.beta,
     }
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    alphanet = AlphaNet(2*samples.shape[-1], model.DOF)
+    alphanet = AlphaNet(2*(N+1), model.DOF, hidden_dim=args.hidden_dim)
     optimizer = optim.Adam(alphanet.parameters(), lr=1e-3)
     trainer = Trainer(model, alphanet, loss_fn,
-                      optimizer, N_EPOCHS, BATCH_SIZE)
+                      optimizer, args.epochs, args.batch_size)
 
     trainer.train(update=False)
-    print(f"{N_conf} configs, batch size {BATCH_SIZE}")
-    vari, varf = loss_fn.initial_var, loss_fn.variance(
-        alphas=alphanet, sampletype="all")
-    print(f"Variance reduction {vari} -> {varf} ({(vari-varf)*100/vari}%)")
-
-    stni = loss_fn.target_exp/(vari**0.5)
-    stnf = loss_fn.expectation(
-        alphas=alphanet, sampletype="all").real/(varf**0.5)
-    print(f"StN improvement {stni} -> {stnf} ({(stnf-stni)*100/stni}%)")
-    label = f"N={N}, beta={BETA}, Nconf={N_conf}, batch_size={
-        BATCH_SIZE}, split={TRAINING_SPLIT}"
+    label = f"N = {N}, beta = {args.beta}, Nconf = {N_conf}, batch_size = {args.batch_size}, split = {args.split}"
     trainer.plot_training(plot_label=label, show=False)
