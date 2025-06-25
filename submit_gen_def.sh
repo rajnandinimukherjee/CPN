@@ -3,7 +3,7 @@
 
 # using options from https://github.com/paboyle/Grid/tree/develop/systems/Tursa
 
-#SBATCH -J gen_SkewMatDef
+#SBATCH -J gen_ProjDef
 #SBATCH -A dp358-cpn
 #SBATCH -t 2:00:00
 #SBATCH --nodes=1
@@ -25,7 +25,7 @@ app='/mnt/lustre/tursafs1/home/dp358/dp358/dc-mukh1/CPN/general_deformations.py'
 opt=('--N=3' '--i=0' '--j=0' '--pidx=0' '--epochs=800')
 
 # run! #########################################################################
-python3 ${app} "${opt[@]}" --deftype=SkewMatDef
+python3 ${app} "${opt[@]}" --deftype=ProjDef
 #for deftype in 'HomogDef' 'TorusDef' ProjDef' 'SkewMatDef' 'FlowDef'; do
 #    python3 ${app} "${opt[@]}" --deftype=$deftype
 #done

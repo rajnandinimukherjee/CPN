@@ -184,9 +184,10 @@ class Trainer:
         ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
 
         ax[2].set_xlim([0, self.get_epoch_sat()])
-        ax[0].set_ylim([self.loss_fn.target_exp*0.8,
-                       self.loss_fn.target_exp*1.2])
-        ax[1].set_ylim([0, self.loss_fn.initial_var*1.1])
+        ax[0].set_ylim([self.loss_fn.target_exp*0.9,
+                       self.loss_fn.target_exp*1.1])
+        ax[1].set_ylim([self.loss_fn.initial_var*0.1,
+                       self.loss_fn.initial_var*1.1])
 
         fig.text(0.95, 0.5, plot_label, va='center', ha='left', rotation=270)
 
