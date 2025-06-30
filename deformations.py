@@ -17,15 +17,20 @@ class FlowDeformations(nn.Module):
         self.N = N
         self.T = T
         self.deftype = deftype
-        self.DOF = 2*N
+        self.DOF = 4*(N+1)
+        self.input_dim = 4*(N+1)+1
 
-    def getFlow(alphas):
+    def getFlow(self, alphas):
         def flow(t, Z_flat):
-            Z = R2NtoCN(Z_flat)
+            t_arr = t.expand(*Z_flat.shape[:-1], 1)
+            Z_ext = torch.cat([Z_flat, t_arr], axis=-1)
 
-            f = alphas(t, Z)
-            Zf = torch.sum(Z*f, dim=-2, keepdim=True)
-            Zsq = torch.sum(Z*Z, dim=-2, keepdim=True)
+            f_flat = alphas(Z_ext)
+
+            f = R2NtoCN(f_flat)
+            Z = R2NtoCN(Z_flat)
+            Zf = torch.sum(Z*f, dim=-1, keepdim=True)
+            Zsq = torch.sum(Z*Z, dim=-1, keepdim=True)
             overlap = Zf/Zsq
 
             # contraint preserving projection
@@ -43,6 +48,7 @@ class FlowDeformations(nn.Module):
         tspan = torch.linspace(0, self.T, 1)
         ZT = odeint(flow, Z0_flat, tspan)[-1]
 
+        pdb.set_trace()
         return ZT
 
     def detJac(self, X, alphas):
@@ -75,8 +81,9 @@ class SkewMatrixDeformations(nn.Module):
         super(SkewMatrixDeformations, self).__init__()
         self.N = N
         self.deftype = deftype
+        self.input_dim = 2*(N+1)
 
-        self.size = int(2*(N+1))
+        self.size = 2*(N+1)
         self.DOF = int(self.size*(self.size-1)/2)
         self.skew_idx = torch.triu_indices(self.size, self.size, offset=1)
         self.flat_idx = self.skew_idx[0]*self.size + self.skew_idx[1]
@@ -152,6 +159,7 @@ class ProjectorDeformations(nn.Module):
         super(ProjectorDeformations, self).__init__()
         self.N = N
         self.deftype = deftype
+        self.input_dim = 2*(N+1)
 
         self.size = int(2*(N+1))
         self.DOF = int(self.size*self.size)
@@ -222,6 +230,7 @@ class TorusDeformations(nn.Module):
         super(TorusDeformations, self).__init__()
         self.N = N
         self.deftype = deftype
+        self.input_dim = 2*(N+1)
         self.DOF = N
         self.eye = torch.eye(2*(N+1)).to(torch.complex128)
 
@@ -301,6 +310,7 @@ class HomogenousDeformations(nn.Module):
         super(HomogenousDeformations, self).__init__()
         self.N = N
         self.deftype = deftype
+        self.input_dim = 2*(N+1)
         self.DOF = N+1
         self.eye = torch.eye(2*self.DOF)
 

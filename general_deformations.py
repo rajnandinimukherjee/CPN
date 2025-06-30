@@ -268,7 +268,7 @@ if __name__ == "__main__":
 
     loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    alphanet = AlphaNet(2*(N+1), model.DOF, hidden_dim=args.hidden_dim)
+    alphanet = AlphaNet(model.input_dim, model.DOF, hidden_dim=args.hidden_dim)
     optimizer = optim.Adam(alphanet.parameters(), lr=1e-3)
     trainer = Trainer(model, alphanet, loss_fn,
                       optimizer, args.epochs, args.batch_size)

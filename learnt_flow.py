@@ -20,10 +20,8 @@ plt.rcParams.update(plotparams)
 class LearnedFlow(nn.Module):
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
-        self.fc1_real = nn.Linear(
-            2 * input_dim + 1, hidden_dim, dtype=torch.double)
-        self.fc1_imag = nn.Linear(
-            2 * input_dim + 1, hidden_dim, dtype=torch.double)
+        self.fc1_real = nn.Linear(input_dim, hidden_dim, dtype=torch.double)
+        self.fc1_imag = nn.Linear(input_dim, hidden_dim, dtype=torch.double)
         self.fc2_real = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
         self.fc2_imag = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
 
