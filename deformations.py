@@ -2,11 +2,13 @@ import pdb
 
 import torch
 import torch.nn as nn
+from torch.autograd.functional import jacobian
 from torch.func import jacrev, vmap
 from torchdiffeq import odeint
+from tqdm import tqdm
 
-from utils import R2NtoCN, CNtoR2N, Lambda
 from SUN import SUN_generators
+from utils import CNtoR2N, Lambda
 
 
 class FlowDeformations(nn.Module):
@@ -20,35 +22,35 @@ class FlowDeformations(nn.Module):
         self.DOF = 4*(N+1)
         self.input_dim = 4*(N+1)+1
 
-    def getFlow(self, alphas):
-        def flow(t, Z_flat):
-            t_arr = t.expand(*Z_flat.shape[:-1], 1)
-            Z_ext = torch.cat([Z_flat, t_arr], axis=-1)
-
-            f_flat = alphas(Z_ext)
-
-            f = R2NtoCN(f_flat)
-            Z = R2NtoCN(Z_flat)
-            Zf = torch.sum(Z*f, dim=-1, keepdim=True)
-            Zsq = torch.sum(Z*Z, dim=-1, keepdim=True)
-            overlap = Zf/Zsq
-
-            # contraint preserving projection
-            dZdt = f - overlap*Z
-            return CNtoR2N(dZdt)
-        return flow
+    def __repr__(self):
+        return self.name+"_cons" if self.deftype == "constant"\
+            else self.name+"_gen"
 
     def complexify(self, X, alphas):
-        Z0 = torch.complex(X, torch.zeros_like(X))  # shape: (1, N)
-        # assert torch.allclose(torch.sum(Z0**2).real,
-        #                      torch.tensor(1.0), atol=1e-5)
-        Z0_flat = CNtoR2N(Z0)
+        xdim = X.shape[-1]
 
-        flow = self.getFlow(alphas)
-        tspan = torch.linspace(0, self.T, 1)
-        ZT = odeint(flow, Z0_flat, tspan)[-1]
+        def flow(t, Z):
+            Zflat = torch.cat([Z.real, Z.imag], dim=-1)
+            fflat = alphas(t, Zflat)
 
-        pdb.set_trace()
+            f = fflat[..., :xdim]+1j*fflat[..., xdim:]
+
+            fZ = torch.sum(f*Z, dim=-1)
+            ZZ = torch.sum(Z*Z, dim=-1)
+            proj = (fZ/ZZ).unsqueeze(-1)*Z
+            Zdot = f - proj
+            return Zdot
+
+        Z0 = X+1j*torch.zeros_like(X)
+        trange = torch.linspace(0.0, 1.0, 10)
+        ZT = odeint(flow, Z0, trange)[-1]
+
+        ZTdot = flow(torch.tensor(1.0), ZT)
+
+        ZTdotZT = torch.sum(ZTdot*ZT, dim=-1)
+        assert torch.allclose(ZTdotZT, torch.zeros_like(ZTdotZT)), \
+            r"Z^T\dot{Z}!=0"
+
         return ZT
 
     def detJac(self, X, alphas):
@@ -63,10 +65,12 @@ class FlowDeformations(nn.Module):
             Z = self.complexify(x, alphas)
             return Z.imag
 
-        Jreal = vmap(jacrev(Zreal))(flat_X)
-        Jimag = vmap(jacrev(Zimag))(flat_X)
+        J = torch.zeros(flat_X.shape+(X.shape[-1],),
+                        dtype=torch.complex128)
+        for idx in tqdm(range(flat_X.shape[0]), leave=False):
+            J[idx,] = jacobian(Zreal, flat_X[idx])
+            J[idx,] += jacobian(Zimag, flat_X[idx])
 
-        J = Jreal + 1j*Jimag
         J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
 
         detJ = torch.linalg.det(J)
@@ -89,7 +93,7 @@ class SkewMatrixDeformations(nn.Module):
         self.flat_idx = self.skew_idx[0]*self.size + self.skew_idx[1]
 
     def __repr__(self):
-        return self.name+"_cons" if self.deftype == "constant" \
+        return self.name+"_cons" if self.deftype == "constant"\
             else self.name+"_gen"
 
     def build_A(self, alphas):
@@ -166,7 +170,7 @@ class ProjectorDeformations(nn.Module):
         self.eye = torch.eye(self.size)
 
     def __repr__(self):
-        return self.name+"_cons" if self.deftype == "constant" \
+        return self.name+"_cons" if self.deftype == "constant"\
             else self.name+"_gen"
 
     def deformx(self, X, alphas):
@@ -237,7 +241,7 @@ class TorusDeformations(nn.Module):
         self.basis = SUN_generators(N+1, cartan=True)
 
     def __repr__(self):
-        return self.name+"_cons" if self.deftype == "constant" \
+        return self.name+"_cons" if self.deftype == "constant"\
             else self.name+"_gen"
 
     def deformx(self, X, alphas):
@@ -318,7 +322,7 @@ class HomogenousDeformations(nn.Module):
         self.omega = torch.block_diag(*blocks).to(torch.float64)
 
     def __repr__(self):
-        return self.name+"_cons" if self.deftype == "constant" \
+        return self.name+"_cons" if self.deftype == "constant"\
             else self.name+"_gen"
 
     def deformx(self, X, alphas):

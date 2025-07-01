@@ -1,43 +1,29 @@
-import pdb
-
-import h5py
-import matplotlib.pyplot as plt
 import torch
+import pdb
+import h5py
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-
-import deformations as defs
-from actions import ToyModelAction
-from observables import OnePointFn
-import torch.nn.functional as F
-from plot_settings import plotparams
-from utils import call_PDF
-
-plt.rcParams.update(plotparams)
+from torchdiffeq import odeint
 
 
-class LearnedFlow(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
-        self.fc1_real = nn.Linear(input_dim, hidden_dim, dtype=torch.double)
-        self.fc1_imag = nn.Linear(input_dim, hidden_dim, dtype=torch.double)
-        self.fc2_real = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
-        self.fc2_imag = nn.Linear(hidden_dim, input_dim, dtype=torch.double)
+class AlphaNet(nn.Module):
 
-    def forward(self, t, Z):
-        # Z: shape (batch_size, N), complex-valued
-        Z_cat = torch.cat([Z.real, Z.imag], dim=-1)  # shape: (batch_size, 2N)
-        t_input = t * torch.ones(Z.shape[0], 1, device=Z.device)
-        inp = torch.cat([t_input, Z_cat], dim=-1)  # shape: (batch_size, 2N+1)
+    def __init__(self, input_dim, output_dim, hidden_dim=16):
+        super(AlphaNet, self).__init__()
+        self.network = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim, dtype=torch.double),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim, dtype=torch.double),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim, dtype=torch.double)
+        )
+        self.hd = hidden_dim
 
-        h_real = F.tanh(self.fc1_real(inp))
-        h_imag = F.tanh(self.fc1_imag(inp))
-        out_real = self.fc2_real(h_real)
-        out_imag = self.fc2_imag(h_imag)
-
-        out = torch.complex(out_real, out_imag)  # shape: (batch_size, 2N)
-        return out
+    def forward(self, t, X):
+        t_ = t.expand(*X.shape[:-1], 1)
+        tX = torch.cat([t_, X], dim=-1)
+        return self.network(tX)
 
 
 class VarianceLoss(nn.Module):
@@ -80,7 +66,7 @@ class Trainer:
         self.train_size = self.model.samples["train"].size(0)
         self.test_size = self.model.samples["test"].size(0)
         self.parnet = parnet
-        self.name = f"{self.model}_{self.parnet}"
+        self.name = f"{self.model}_hdim{self.parnet.hd}"
 
         self.train_var, self.train_exp = [], []
         self.test_var, self.test_exp = [], []
@@ -116,13 +102,33 @@ class Trainer:
         self.test_var = torch.tensor(self.test_var)
         self.test_exp = torch.tensor(self.test_exp).real
 
+    def get_epoch_sat(self, window_size=10, min_change=1e-4, min_idx=100):
+        rel_changes = torch.abs(
+            (self.test_var[:-1]-self.test_var[1:])/self.test_var[:-1])
+
+        kernel = torch.ones(window_size)
+        stable_mask = (rel_changes < min_change).float()
+        convolved = torch.nn.functional.conv1d(
+            stable_mask.view(1, 1, -1),  # input
+            kernel.view(1, 1, -1),       # kernel
+            padding=0
+        ).view(-1)
+        all_idx = (convolved == window_size).nonzero(as_tuple=True)[0]
+        stable_idx = all_idx[all_idx >= min_idx]
+        epochs = torch.arange(self.epochs)
+        if len(stable_idx) > 0:
+            epoch_sat = epochs[stable_idx[0] + window_size]
+        else:
+            epoch_sat = epochs[-1]
+        return epoch_sat
+
     def plot_training(self, fname="", show=True,
-                      plot_error=True):
+                      plot_label="", plot_error=True,):
         i, j = self.loss_fn.kwargs["i"], self.loss_fn.kwargs["j"]
         sub_str = f"{i+1}{j+1}"
 
-        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(5, 8),
-                               gridspec_kw={"height_ratios": [2, 1, 1]})
+        fig, ax = plt.subplots(nrows=3, sharex=True, figsize=(3, 5),
+                               gridspec_kw={"height_ratios": [1.5, 1, 1]})
 
         ax[0].plot(range(self.epochs), self.train_exp,
                    label="train", c="tab:blue")
@@ -169,7 +175,13 @@ class Trainer:
         ax[2].set_xlabel('epochs')
         ax[2].set_ylabel(r'$\mathtt{StN}\left[Q_{'+sub_str+r'}\right]$')
 
-        ax[2].set_xlim([0, self.epochs])
+        ax[2].set_xlim([0, self.get_epoch_sat()])
+        ax[0].set_ylim([self.loss_fn.target_exp*0.9,
+                       self.loss_fn.target_exp*1.1])
+        ax[1].set_ylim([self.loss_fn.initial_var*0.1,
+                       self.loss_fn.initial_var*1.1])
+
+        fig.text(0.95, 0.5, plot_label, va='center', ha='left', rotation=270)
 
         plt.tight_layout()
         plt.subplots_adjust(hspace=0)
@@ -181,16 +193,12 @@ class Trainer:
 
 
 N = 3
-N_EPOCHS = 1000
-BETA = 4.5
 ACTION = ToyModelAction
 OBS = OnePointFn
-I, J, VARIDX = 0, 0, 0
-BATCH_SIZE = 1000
-TRAINING_SPLIT = 0.8
+TRAIN_SPLIT = 0.8
+
 
 if __name__ == "__main__":
-
     file = h5py.File(f"CP{N}.h5", 'r')["configs"]
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
@@ -199,39 +207,33 @@ if __name__ == "__main__":
         dtype=torch.complex128)
     N_conf = len(samples)
 
-    train_indices = torch.randperm(N_conf)[:int(TRAINING_SPLIT*N_conf)]
+    train_indices = torch.randperm(N_conf)[:int(TRAIN_SPLIT*N_conf)]
 
-    N = samples.shape[-1] - 1
-    model = defs.FlowDeformations(N, deftype="general")
-    model.samples = {
-        "all": samples,
-        "train": samples[train_indices],
-        "test": samples[~train_indices]
-    }
 
-    obskwargs = {
-        "i": I,
-        "j": J,
-        "varidx": VARIDX,
-        "action": ACTION,
-        "beta": BETA,
-    }
+def loss_fn(Z, target):
+    return torch.mean((Z - target) ** 2)
 
-    loss_fn = VarianceLoss(model, samples, N, OnePointFn, **obskwargs)
 
-    flownet = LearnedFlow(2*samples.shape[-1], model.DOF)
-    optimizer = optim.Adam(flownet.parameters(), lr=1e-3)
-    trainer = Trainer(model, flownet, loss_fn,
-                      optimizer, N_EPOCHS, BATCH_SIZE)
+def train_flow():
+    func = AlphaNet(input_dim=4*(N+1)+1, output_dim=4*(N+1))
+    trange = torch.linspace(0.0, 1.0, 10)
 
-    trainer.train(update=False)
-    print(f"{N_conf} configs, batch size {BATCH_SIZE}")
-    vari, varf = loss_fn.initial_var, loss_fn.variance(
-        alphas=flownet, sampletype="all")
-    print(f"Variance reduction {vari} -> {varf} ({(vari-varf)*100/vari}%)")
+    # Initial condition Z0
+    Z0 = torch.cat([Xi, torch.zeros_like(Xi)], dim=-1)
 
-    stni = loss_fn.target_exp/(vari**0.5)
-    stnf = loss_fn.expectation(
-        alphas=flownet, sampletype="all").real/(varf**0.5)
-    print(f"StN improvement {stni} -> {stnf} ({(stnf-stni)*100/stni}%)")
-    trainer.plot_training(show=False)
+    # Target we want Z(T) to reach
+    target = torch.cat([Xf, Yf], dim=-1)
+
+    optimizer = optim.Adam(func.parameters(), lr=0.01)
+
+    for itr in tqdm(range(1000), desc="epoch:", leave=False):
+        optimizer.zero_grad()
+        ZT = odeint(func, Z0, trange)
+        loss = loss_fn(ZT[-1], target)  # Use final state at t=1
+        loss.backward()
+        optimizer.step()
+
+        if itr % 100 == 0:
+            print(f"Iter {itr}: Loss = {loss.item():.4f}")
+
+    return func

@@ -3,7 +3,6 @@ import pdb
 
 from actions import ToyModelAction
 from utils import CNtoR2N
-import deformations as defs
 
 
 def OnePointFn(i=0, j=0, action=ToyModelAction, pidx=0,

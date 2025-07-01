@@ -32,6 +32,20 @@ def Lambda(Y):
     return (1+torch.einsum('...i,...i->...', Y.conj(), Y))**0.5
 
 
+def randSN(N):
+    """ generates a random variable from S^N set
+        in form of a normalised R^{N+1} vector """
+
+    SN = torch.randn(N+1)
+    return SN/torch.linalg.norm(SN)
+
+
+def randCPN(N):
+    """ generates a random CP(N) vector """
+
+    return R2NtoCN(randSN(2*N+1))
+
+
 def call_PDF(filename, show=True):
     """ plots matplotlib graphics to pdfs, saves and opens file"""
 
