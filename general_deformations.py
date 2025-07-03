@@ -175,6 +175,6 @@ if __name__ == "__main__":
                       optimizer, args.epochs, args.batch_size)
 
     trainer.train(update=args.update)
-    label = f"N = {N}, beta = {args.beta}, Nconf = {
-        N_conf}, batch_size = {args.batch_size}, split = {args.split}"
+    label = f"N = {N}, beta = {args.beta}, Nconf = {N_conf}, "
+    label += f"batch_size = {args.batch_size}, split = {args.split}"
     tu.plot_training(trainer, plot_label=label, show=False)

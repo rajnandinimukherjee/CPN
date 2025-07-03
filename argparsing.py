@@ -22,14 +22,13 @@ def parseargs():
                         type=float, default=0.8)
     parser.add_argument("--deftype", help=f"constant deformation type ({'|'.join(def_names)})",
                         type=str, default="HomogDef")
-    parser.add_argument("--hidden_dim", help=f"alphanet hidden layer dimension",
+    parser.add_argument("--hidden_dim", help=f"parnet hidden layer dimension",
                         type=int, default=16)
     parser.add_argument(
         "--update", help="print updates every 10 epochs", type=bool, default=False)
     args = parser.parse_args()
 
-    assert args.deftype in def_names, f"Deformation type not recognized, choose from {
-        ', '.join(def_names)}"
+    assert args.deftype in def_names, f"Deformation type not recognized, choose from {', '.join(def_names)}"
 
     if args.deftype == "TorusDef":
         deformation = defs.TorusDeformations

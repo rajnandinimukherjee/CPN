@@ -3,7 +3,7 @@
 
 # using options from https://github.com/paboyle/Grid/tree/develop/systems/Tursa
 
-#SBATCH -J gen_ProjDef
+#SBATCH -J gen_FlowDef
 #SBATCH -A dp358-cpn
 #SBATCH -t 2:00:00
 #SBATCH --nodes=1
@@ -22,10 +22,10 @@ source "/mnt/lustre/tursafs1/home/dp358/dp358/dc-mukh1/pyenvs/venv311/bin/activa
 
 # application and parameters ###################################################
 app='/mnt/lustre/tursafs1/home/dp358/dp358/dc-mukh1/CPN/general_deformations.py'
-opt=('--N=3' '--i=0' '--j=0' '--pidx=0' '--epochs=800')
+opt=('--N=3' '--i=0' '--j=0' '--pidx=0' '--epochs=100')
 
 # run! #########################################################################
-python3 ${app} "${opt[@]}" --deftype=ProjDef
+python3 ${app} "${opt[@]}" --deftype=FlowDef
 #for deftype in 'HomogDef' 'TorusDef' ProjDef' 'SkewMatDef' 'FlowDef'; do
 #    python3 ${app} "${opt[@]}" --deftype=$deftype
 #done
