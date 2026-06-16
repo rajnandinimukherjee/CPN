@@ -1,81 +1,38 @@
+import itertools
 import pdb
 
 import torch
 import torch.nn as nn
-from torch.autograd.functional import jacobian
 from torch.func import jacrev, vmap
 from torchdiffeq import odeint
-from tqdm import tqdm
 
 from SUN import SUN_generators
-from utils import CNtoR2N, Lambda
+from CPN_utils import CNtoR2N, Lambda, compCat, compUncat
+from SphereDiffeos import VectorHarmonics
 
 
 class FlowDeformations(nn.Module):
     name = "FlowDef"
 
-    def __init__(self, N, T=10, deftype="general"):
+    def __init__(self, N, N_t=10, lmax=2):
         super(FlowDeformations, self).__init__()
-        self.N = N
-        self.T = T
-        self.deftype = deftype
-        self.DOF = 4*(N+1)
-        self.input_dim = 4*(N+1)+1
+        self.N, self.N_t = N, N_t
+        self.trange = torch.linspace(1, N_t)
+
+        VH = VectorHarmonics(2*N+2, lmax)
+        self.DOF = VH.N_params*N_t
 
     def __repr__(self):
-        return self.name+"_cons" if self.deftype == "constant"\
-            else self.name+"_gen"
+        return self.name+"_gen"
+
+    def diffeo(self, X, alphas):
+        return 0
 
     def complexify(self, X, alphas):
-        xdim = X.shape[-1]
-
-        def flow(t, Z):
-            Zflat = torch.cat([Z.real, Z.imag], dim=-1)
-            fflat = alphas(t, Zflat)
-
-            f = fflat[..., :xdim]+1j*fflat[..., xdim:]
-
-            fZ = torch.sum(f*Z, dim=-1)
-            ZZ = torch.sum(Z*Z, dim=-1)
-            proj = (fZ/ZZ).unsqueeze(-1)*Z
-            Zdot = f - proj
-            return Zdot
-
-        Z0 = X+1j*torch.zeros_like(X)
-        trange = torch.linspace(0.0, 1.0, 10)
-        ZT = odeint(flow, Z0, trange)[-1]
-
-        ZTdot = flow(torch.tensor(1.0), ZT)
-
-        ZTdotZT = torch.sum(ZTdot*ZT, dim=-1)
-        assert torch.allclose(ZTdotZT, torch.zeros_like(ZTdotZT)), \
-            r"Z^T\dot{Z}!=0"
-
-        return ZT
+        return 0
 
     def detJac(self, X, alphas):
-        batch_shape = X.shape[:-1]
-        flat_X = X.reshape(-1, X.shape[-1])
-
-        def Zreal(x):
-            Z = self.complexify(x, alphas)
-            return Z.real
-
-        def Zimag(x):
-            Z = self.complexify(x, alphas)
-            return Z.imag
-
-        J = torch.zeros(flat_X.shape+(X.shape[-1],),
-                        dtype=torch.complex128)
-        for idx in tqdm(range(flat_X.shape[0]), leave=False):
-            J[idx,] = jacobian(Zreal, flat_X[idx])
-            J[idx,] += jacobian(Zimag, flat_X[idx])
-
-        J = J.reshape(*batch_shape, X.shape[-1], X.shape[-1])
-
-        detJ = torch.linalg.det(J)
-
-        return torch.prod(detJ, dim=-1)
+        return 0
 
 
 class SkewMatrixDeformations(nn.Module):

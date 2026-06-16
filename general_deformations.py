@@ -42,10 +42,17 @@ class FlowNet(nn.Module):
         )
         self.hd = hidden_dim
 
-    def forward(self, t, X):
-        t_ = t.expand(*X.shape[:-1], 1).to(X.dtype)
-        tX = torch.cat([t_, X], dim=-1)
-        return self.network(tX)
+    def forward(self, t, flat_Z):
+        t_ = t.expand(*flat_Z.shape[:-1], 1).to(flat_Z.dtype)
+        tZ = torch.cat([t_, flat_Z], dim=-1)
+        return self.network(tZ)
+
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.normal_(m.weight, mean=0.0, std=1e-3)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
 
 
 class VarianceLoss(nn.Module):
@@ -62,10 +69,11 @@ class VarianceLoss(nn.Module):
         self.target_exp = self.expectation(deform=False, sampletype="all").real
 
     def get_obs(self, alphas=None, batch_idx=None,
-                deform=True, sampletype="train"):
+                deform=True, sampletype="train", **add_kwargs):
         return self.obs(deform=deform, alphas=alphas,
                         model=self.model, batch_idx=batch_idx,
-                        sampletype=sampletype, **self.kwargs)
+                        sampletype=sampletype, **self.kwargs,
+                        **add_kwargs)
 
     def forward(self, **kwargs):
         return self.variance(**kwargs)
@@ -94,6 +102,8 @@ class Trainer:
         self.test_var, self.test_exp = [], []
 
     def train(self, update=False):
+        print(f"Undeformed mean={self.loss_fn.target_exp}, var={
+              self.loss_fn.initial_var}")
         with tqdm(range(self.epochs)) as pbar:
             for epoch in pbar:
                 self.optimizer.zero_grad()
@@ -103,29 +113,35 @@ class Trainer:
                 loss = self.loss_fn(alphas=self.parnet,
                                     batch_idx=batch_idx,
                                     sampletype="train")
+                if model.name == "FlowDef":
+                    fsize = self.loss_fn.get_obs(alphas=self.parnet,
+                                                 batch_idx=batch_idx,
+                                                 sampletype="train",
+                                                 t=torch.tensor(1.0),
+                                                 parsize=True)
                 loss.backward()
                 self.optimizer.step()
 
-                pbar.set_description(f"loss: {loss.item():.2f}")
+                pbar.set_description(f"loss: {loss.item():.4f}")
                 if epoch % 10 == 0 and update:
                     print(f"Epoch {epoch}: Loss = {loss.item()}")
 
-                # self.train_var.append(loss.item())
-                # self.train_exp.append(self.loss_fn.expectation(
-                #    alphas=self.parnet,
-                #    batch_idx=batch_idx,
-                #    sampletype="train"))
-                # self.test_var.append(self.loss_fn.variance(
-                #    alphas=self.parnet,
-                #    sampletype="test"))
-                # self.test_exp.append(self.loss_fn.expectation(
-                #    alphas=self.parnet,
-                #    sampletype="test"))
+                self.train_var.append(loss.item())
+                self.train_exp.append(self.loss_fn.expectation(
+                    alphas=self.parnet,
+                    batch_idx=batch_idx,
+                    sampletype="train"))
+                self.test_var.append(self.loss_fn.variance(
+                    alphas=self.parnet,
+                    sampletype="test"))
+                self.test_exp.append(self.loss_fn.expectation(
+                    alphas=self.parnet,
+                    sampletype="test"))
 
-        # self.train_var = torch.tensor(self.train_var)
-        # self.train_exp = torch.tensor(self.train_exp).real
-        # self.test_var = torch.tensor(self.test_var)
-        # self.test_exp = torch.tensor(self.test_exp).real
+        self.train_var = torch.tensor(self.train_var)
+        self.train_exp = torch.tensor(self.train_exp).real
+        self.test_var = torch.tensor(self.test_var)
+        self.test_exp = torch.tensor(self.test_exp).real
 
 
 ACTION = ToyModelAction
@@ -139,7 +155,7 @@ if __name__ == "__main__":
     burn = int(file["info"]["burn"][0])
     stepsize = int(file["info"]["stepsize"][0])
     samples = torch.tensor(
-        file["vectors"][burn+1::stepsize],
+        file["vectors"][burn+1::stepsize*10],
         dtype=torch.complex128)
     N_conf = len(samples)
 
@@ -169,6 +185,7 @@ if __name__ == "__main__":
     }
     parnet = FlowNet(**netargs) if args.deftype == "FlowDef"\
         else AlphaNet(**netargs)
+    parnet.apply(init_weights)
 
     optimizer = optim.Adam(parnet.parameters(), lr=1e-3)
     trainer = Trainer(model, parnet, loss_fn,
@@ -177,4 +194,4 @@ if __name__ == "__main__":
     trainer.train(update=args.update)
     label = f"N = {N}, beta = {args.beta}, Nconf = {N_conf}, "
     label += f"batch_size = {args.batch_size}, split = {args.split}"
-    tu.plot_training(trainer, plot_label=label, show=False)
+    tu.plot_training(trainer, plot_label=label, show=True)

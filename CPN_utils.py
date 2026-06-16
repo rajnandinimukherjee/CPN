@@ -1,4 +1,5 @@
 import os
+import pdb
 
 import matplotlib.pyplot as plt
 import torch
@@ -58,3 +59,17 @@ def call_PDF(filename, show=True):
     plt.close("all")
     if show:
         os.system("open " + filename)
+
+
+def compCat(x):
+    """ concatenates real and imaginary parts 
+    of a complex tensor along the last dimension """
+    if x.dtype != torch.complex128:
+        x = x.to(torch.complex128)
+    return torch.cat([x.real, x.imag], dim=-1)
+
+
+def compUncat(x):
+    assert x.shape[-1] % 2 == 0, "last dimension size must be even"
+    dim = int(x.shape[-1]/2)
+    return x[..., :dim]+1j*x[..., dim:]

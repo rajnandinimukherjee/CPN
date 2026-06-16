@@ -2,13 +2,13 @@ import torch
 import pdb
 
 from actions import ToyModelAction
-from utils import CNtoR2N
+from CPN_utils import CNtoR2N, compCat, compUncat
 
 
 def OnePointFn(i=0, j=0, action=ToyModelAction, pidx=0,
                deform=False, model=None, alphas=None, beta=4.5,
                batch_idx=slice(None), sampletype="train",
-               pause=False, **kwargs):
+               pause=False, parsize=False, **kwargs):
 
     assert sampletype in ["train", "test",
                           "all"], "sampletype must be train, test or all"
@@ -20,6 +20,8 @@ def OnePointFn(i=0, j=0, action=ToyModelAction, pidx=0,
     if deform:
         X = CNtoR2N(x)
         Z = model.complexify(X, alphas)
+        if parsize:
+            return compUncat(alphas(kwargs["t"], compCat(Z)))
 
         z = Z[..., ::2] + 1j * Z[..., 1::2]
         zconj = Z[..., ::2] - 1j * Z[..., 1::2]

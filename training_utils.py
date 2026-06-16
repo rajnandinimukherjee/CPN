@@ -1,5 +1,5 @@
 import torch
-from utils import call_PDF
+from CPN_utils import call_PDF
 import matplotlib.pyplot as plt
 from plot_settings import plotparams
 plt.rcParams.update(plotparams)
